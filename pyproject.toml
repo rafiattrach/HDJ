@@ -1,0 +1,15 @@
+[project]
+name = "hdj-rag"
+version = "0.1.0"
+description = "Health Data Justice RAG pipeline"
+requires-python = ">=3.12"
+dependencies = [
+    "haiku.rag>=0.25.0",
+    "streamlit>=1.40.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.uv]
+dev-dependencies = []

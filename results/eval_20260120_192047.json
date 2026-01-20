@@ -1,0 +1,150 @@
+{
+  "timestamp": "20260120_192047",
+  "summary": {
+    "best_query": "discrimination_focus",
+    "best_recall": 0.8,
+    "total_queries": 5
+  },
+  "results": [
+    {
+      "name": "governance_questions",
+      "query": "Does data governance enable or disable oppression? Does it address structural inequality? Are data practices aligned with community goals? Is there equitable access to benefits? Are affected populatio...",
+      "recall": 0.6,
+      "precision": 0.45,
+      "found": 9,
+      "total_gold": 15,
+      "retrieved": 20,
+      "found_texts": [
+        "I will explore the problem of data-driven discrimination using two illustrative cases, both of which demonstrate that a specific articulation of socia...",
+        "The system's design does not acknowledge the materiality of poverty, being unable to 'authenticate those who work with stone, cement, limestone and th...",
+        "The problem of Aadhaar's uneven burden on the poor was illustrated by the government's 2016 demonetisation, which threw the cash-based elements of Ind...",
+        "Aadhaar is what Johnson (2014) in his work on information justice terms a 'disciplinary system'. It raises several issues to do with justice that are ...",
+        "Digital transformation and urgently needed relief of long-term care and nursing staff is being stepped up. For this purpose, a Competence Centre for D...",
+        "In many cases, the type of healthcare a person receives is still too often a matter of chance. If more digitally assisted healthcare programmes were a...",
+        "This Digitalisation Strategy for Health and Care was developed in collaboration with numerous representatives from the medical and pharmaceutical comm...",
+        "Simplifying and accelerating seamless administrative processes by means of automation, access to relevant data, and cross-sectoral networking and inte...",
+        "Strict implementation management that includes all relevant stakeholders"
+      ],
+      "missed_texts": [
+        "A second example comes from a system that at the time of writing was still at the conceptualisation stage, but which demonstrates how algorithmic unce...",
+        "This proposal was problematic for several reasons. First, the machine learning involved would allow the project to categorise migrants based on behavi...",
+        "In reality, however, it is possible to be an undocumented migrant from anywhere on earth and have a valid claim to asylum. This is because anyone can ...",
+        "A system such as this serves to demonstrate how the possibilities of control through data technologies coevolve with the possibilities of care (Lyon, ...",
+        "There is a strong incentive for commercial analysts, in this case, to stress the accuracy of their automated predictions, since this raises their valu...",
+        "The likely inaccuracy of such a system notwithstanding, this leads us to the larger problem: that rights that are supposed to be fundamental \u2013 includi..."
+      ]
+    },
+    {
+      "name": "discrimination_focus",
+      "query": "Data-driven discrimination against poor, marginalized and vulnerable populations. Biometric databases excluding those with worn fingerprints. Surveillance of migrants and refugees. Algorithmic systems...",
+      "recall": 0.8,
+      "precision": 0.6,
+      "found": 12,
+      "total_gold": 15,
+      "retrieved": 20,
+      "found_texts": [
+        "I will explore the problem of data-driven discrimination using two illustrative cases, both of which demonstrate that a specific articulation of socia...",
+        "The system's design does not acknowledge the materiality of poverty, being unable to 'authenticate those who work with stone, cement, limestone and th...",
+        "The problem of Aadhaar's uneven burden on the poor was illustrated by the government's 2016 demonetisation, which threw the cash-based elements of Ind...",
+        "Aadhaar is what Johnson (2014) in his work on information justice terms a 'disciplinary system'. It raises several issues to do with justice that are ...",
+        "A second example comes from a system that at the time of writing was still at the conceptualisation stage, but which demonstrates how algorithmic unce...",
+        "This proposal was problematic for several reasons. First, the machine learning involved would allow the project to categorise migrants based on behavi...",
+        "In reality, however, it is possible to be an undocumented migrant from anywhere on earth and have a valid claim to asylum. This is because anyone can ...",
+        "A system such as this serves to demonstrate how the possibilities of control through data technologies coevolve with the possibilities of care (Lyon, ...",
+        "There is a strong incentive for commercial analysts, in this case, to stress the accuracy of their automated predictions, since this raises their valu...",
+        "The likely inaccuracy of such a system notwithstanding, this leads us to the larger problem: that rights that are supposed to be fundamental \u2013 includi...",
+        "In many cases, the type of healthcare a person receives is still too often a matter of chance. If more digitally assisted healthcare programmes were a...",
+        "Simplifying and accelerating seamless administrative processes by means of automation, access to relevant data, and cross-sectoral networking and inte..."
+      ],
+      "missed_texts": [
+        "Digital transformation and urgently needed relief of long-term care and nursing staff is being stepped up. For this purpose, a Competence Centre for D...",
+        "This Digitalisation Strategy for Health and Care was developed in collaboration with numerous representatives from the medical and pharmaceutical comm...",
+        "Strict implementation management that includes all relevant stakeholders"
+      ]
+    },
+    {
+      "name": "core_concept",
+      "query": "Data Justice means fairness in how data practices distribute benefits and harms. It involves equitable access, discrimination prevention, and inclusive governance.",
+      "recall": 0.3333333333333333,
+      "precision": 0.25,
+      "found": 5,
+      "total_gold": 15,
+      "retrieved": 20,
+      "found_texts": [
+        "Aadhaar is what Johnson (2014) in his work on information justice terms a 'disciplinary system'. It raises several issues to do with justice that are ...",
+        "In many cases, the type of healthcare a person receives is still too often a matter of chance. If more digitally assisted healthcare programmes were a...",
+        "This Digitalisation Strategy for Health and Care was developed in collaboration with numerous representatives from the medical and pharmaceutical comm...",
+        "Simplifying and accelerating seamless administrative processes by means of automation, access to relevant data, and cross-sectoral networking and inte...",
+        "Strict implementation management that includes all relevant stakeholders"
+      ],
+      "missed_texts": [
+        "I will explore the problem of data-driven discrimination using two illustrative cases, both of which demonstrate that a specific articulation of socia...",
+        "The system's design does not acknowledge the materiality of poverty, being unable to 'authenticate those who work with stone, cement, limestone and th...",
+        "The problem of Aadhaar's uneven burden on the poor was illustrated by the government's 2016 demonetisation, which threw the cash-based elements of Ind...",
+        "A second example comes from a system that at the time of writing was still at the conceptualisation stage, but which demonstrates how algorithmic unce...",
+        "This proposal was problematic for several reasons. First, the machine learning involved would allow the project to categorise migrants based on behavi...",
+        "In reality, however, it is possible to be an undocumented migrant from anywhere on earth and have a valid claim to asylum. This is because anyone can ...",
+        "A system such as this serves to demonstrate how the possibilities of control through data technologies coevolve with the possibilities of care (Lyon, ...",
+        "There is a strong incentive for commercial analysts, in this case, to stress the accuracy of their automated predictions, since this raises their valu...",
+        "The likely inaccuracy of such a system notwithstanding, this leads us to the larger problem: that rights that are supposed to be fundamental \u2013 includi...",
+        "Digital transformation and urgently needed relief of long-term care and nursing staff is being stepped up. For this purpose, a Competence Centre for D..."
+      ]
+    },
+    {
+      "name": "3_pillars",
+      "query": "Three pillars of data justice: 1. Visibility - right to representation and privacy 2. Engagement - right to benefit from data and retain autonomy 3. Non-discrimination - right to be free from discrimi...",
+      "recall": 0.4666666666666667,
+      "precision": 0.35,
+      "found": 7,
+      "total_gold": 15,
+      "retrieved": 20,
+      "found_texts": [
+        "Aadhaar is what Johnson (2014) in his work on information justice terms a 'disciplinary system'. It raises several issues to do with justice that are ...",
+        "A system such as this serves to demonstrate how the possibilities of control through data technologies coevolve with the possibilities of care (Lyon, ...",
+        "The likely inaccuracy of such a system notwithstanding, this leads us to the larger problem: that rights that are supposed to be fundamental \u2013 includi...",
+        "In many cases, the type of healthcare a person receives is still too often a matter of chance. If more digitally assisted healthcare programmes were a...",
+        "This Digitalisation Strategy for Health and Care was developed in collaboration with numerous representatives from the medical and pharmaceutical comm...",
+        "Simplifying and accelerating seamless administrative processes by means of automation, access to relevant data, and cross-sectoral networking and inte...",
+        "Strict implementation management that includes all relevant stakeholders"
+      ],
+      "missed_texts": [
+        "I will explore the problem of data-driven discrimination using two illustrative cases, both of which demonstrate that a specific articulation of socia...",
+        "The system's design does not acknowledge the materiality of poverty, being unable to 'authenticate those who work with stone, cement, limestone and th...",
+        "The problem of Aadhaar's uneven burden on the poor was illustrated by the government's 2016 demonetisation, which threw the cash-based elements of Ind...",
+        "A second example comes from a system that at the time of writing was still at the conceptualisation stage, but which demonstrates how algorithmic unce...",
+        "This proposal was problematic for several reasons. First, the machine learning involved would allow the project to categorise migrants based on behavi...",
+        "In reality, however, it is possible to be an undocumented migrant from anywhere on earth and have a valid claim to asylum. This is because anyone can ...",
+        "There is a strong incentive for commercial analysts, in this case, to stress the accuracy of their automated predictions, since this raises their valu...",
+        "Digital transformation and urgently needed relief of long-term care and nursing staff is being stepped up. For this purpose, a Competence Centre for D..."
+      ]
+    },
+    {
+      "name": "health_equity",
+      "query": "Equitable access to healthcare through digitalisation. Patient sovereignty and informed consent. Stakeholder participation in health data governance. Rural access to telemedicine and digital health se...",
+      "recall": 0.3333333333333333,
+      "precision": 0.25,
+      "found": 5,
+      "total_gold": 15,
+      "retrieved": 20,
+      "found_texts": [
+        "Digital transformation and urgently needed relief of long-term care and nursing staff is being stepped up. For this purpose, a Competence Centre for D...",
+        "In many cases, the type of healthcare a person receives is still too often a matter of chance. If more digitally assisted healthcare programmes were a...",
+        "This Digitalisation Strategy for Health and Care was developed in collaboration with numerous representatives from the medical and pharmaceutical comm...",
+        "Simplifying and accelerating seamless administrative processes by means of automation, access to relevant data, and cross-sectoral networking and inte...",
+        "Strict implementation management that includes all relevant stakeholders"
+      ],
+      "missed_texts": [
+        "I will explore the problem of data-driven discrimination using two illustrative cases, both of which demonstrate that a specific articulation of socia...",
+        "The system's design does not acknowledge the materiality of poverty, being unable to 'authenticate those who work with stone, cement, limestone and th...",
+        "The problem of Aadhaar's uneven burden on the poor was illustrated by the government's 2016 demonetisation, which threw the cash-based elements of Ind...",
+        "Aadhaar is what Johnson (2014) in his work on information justice terms a 'disciplinary system'. It raises several issues to do with justice that are ...",
+        "A second example comes from a system that at the time of writing was still at the conceptualisation stage, but which demonstrates how algorithmic unce...",
+        "This proposal was problematic for several reasons. First, the machine learning involved would allow the project to categorise migrants based on behavi...",
+        "In reality, however, it is possible to be an undocumented migrant from anywhere on earth and have a valid claim to asylum. This is because anyone can ...",
+        "A system such as this serves to demonstrate how the possibilities of control through data technologies coevolve with the possibilities of care (Lyon, ...",
+        "There is a strong incentive for commercial analysts, in this case, to stress the accuracy of their automated predictions, since this raises their valu...",
+        "The likely inaccuracy of such a system notwithstanding, this leads us to the larger problem: that rights that are supposed to be fundamental \u2013 includi..."
+      ]
+    }
+  ]
+}
