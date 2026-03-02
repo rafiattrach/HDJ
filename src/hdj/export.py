@@ -55,36 +55,36 @@ def generate_report(
     semantic_pct = int(semantic_threshold * 100)
 
     # Header
-    lines.append("# HDJ RAG Evaluation Report")
+    lines.append("# Search Validation Report")
     lines.append(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     lines.append("")
 
     # Configuration
     lines.append("## Configuration")
     lines.append(f"- Embedding model: {embedding_model}")
-    lines.append(f"- Chunk size: {chunk_size} tokens")
+    lines.append(f"- Passage size: ~{chunk_size} words")
     lines.append(f"- Search: {search_method}")
-    lines.append(f"- Results per query: {results_limit}")
-    lines.append(f"- Gold match strictness: {overlap_threshold} ({threshold_pct}% word overlap)")
-    lines.append(f"- Semantic match threshold: {semantic_threshold} ({semantic_pct}% cosine similarity)")
+    lines.append(f"- Results per question: {results_limit}")
+    lines.append(f"- Match strictness: {overlap_threshold} ({threshold_pct}% word match)")
+    lines.append(f"- Meaning similarity threshold: {semantic_threshold} ({semantic_pct}% meaning similarity)")
     lines.append("")
 
-    # Decision Provenance
-    lines.append("## Decision Provenance")
+    # How Results Were Determined
+    lines.append("## How Results Were Determined")
     lines.append("")
-    lines.append("How each retrieval decision was made:")
+    lines.append("How each search result was evaluated:")
     lines.append("")
-    lines.append(f"1. **Embedding**: Text is embedded with `{embedding_model}` into {chunk_size}-token chunks")
-    lines.append("2. **Indexing**: Chunks are stored in a LanceDB vector database")
-    lines.append(f"3. **Search**: {search_method}, returning top {results_limit} results per query")
-    lines.append(f"4. **Matching**: Each gold passage is compared to every retrieved chunk using word-level Jaccard overlap (stopwords filtered)")
-    lines.append(f"5. **Threshold**: A gold passage counts as \"found\" if ≥{threshold_pct}% of its *content words* appear in a retrieved chunk (or it is a substring match)")
-    lines.append(f"6. **Semantic similarity**: Cosine similarity between gold passage and chunk embeddings is reported alongside word overlap")
-    lines.append(f"7. **Semantic match fallback**: When word overlap fails but cosine similarity ≥{semantic_pct}%, the passage is counted as a cross-lingual semantic match (enables DE↔EN evaluation)")
+    lines.append(f"1. **Preparation**: Each PDF is split into short passages (~{chunk_size} words) and indexed for search")
+    lines.append("2. **Indexing**: Passages are stored in a local search database")
+    lines.append(f"3. **Search**: {search_method}, returning top {results_limit} results per question")
+    lines.append(f"4. **Matching**: Each reference passage is compared to every retrieved passage using word-level matching (common words filtered out)")
+    lines.append(f"5. **Threshold**: A reference passage counts as \"found\" if ≥{threshold_pct}% of its meaningful words appear in a retrieved passage (or it is an exact text match)")
+    lines.append(f"6. **Meaning similarity**: Meaning similarity between reference and retrieved passages is reported alongside word matching")
+    lines.append(f"7. **Cross-lingual matching**: When word matching fails but meaning similarity ≥{semantic_pct}%, the passage is counted as found via meaning match (enables German ↔ English validation)")
     lines.append("")
     lines.append("**Interpreting scores:**")
-    lines.append("- **Recall** = proportion of gold-standard passages that were found among retrieved chunks")
-    lines.append("- **Precision** = proportion of retrieved chunks that matched at least one gold passage")
+    lines.append("- **Coverage** = proportion of reference passages that were found among retrieved results")
+    lines.append("- **Accuracy** = proportion of retrieved passages that matched at least one reference passage")
     lines.append("")
 
     # Documents indexed
@@ -97,8 +97,8 @@ def generate_report(
         lines.append("- (none)")
     lines.append("")
 
-    # Gold standard
-    lines.append(f"## Gold Standard ({len(gold_standard)} sections)")
+    # Reference Passages
+    lines.append(f"## Reference Passages ({len(gold_standard)} passages)")
     lines.append("")
 
     by_file: dict[str, list[dict]] = {}
@@ -107,7 +107,7 @@ def generate_report(
         by_file.setdefault(src, []).append(entry)
 
     for filename, entries in by_file.items():
-        lines.append(f"### {filename} ({len(entries)} sections)")
+        lines.append(f"### {filename} ({len(entries)} passages)")
         for i, entry in enumerate(entries, 1):
             text = entry.get("text", "")
             preview = text[:120].replace("\n", " ")
@@ -119,8 +119,8 @@ def generate_report(
     # Results summary table
     lines.append("## Results Summary")
     lines.append("")
-    lines.append("| Query | Recall | Precision | Found |")
-    lines.append("|-------|--------|-----------|-------|")
+    lines.append("| Question | Coverage | Accuracy | Found |")
+    lines.append("|----------|----------|----------|-------|")
 
     sorted_results = sorted(results, key=lambda r: r.recall, reverse=True)
     for r in sorted_results:
@@ -131,25 +131,25 @@ def generate_report(
     lines.append("")
     if sorted_results:
         best = sorted_results[0]
-        lines.append(f"Best query: {best.name} ({best.recall:.0%} recall)")
+        lines.append(f"Best question: {best.name} ({best.recall:.0%} coverage)")
     lines.append("")
 
-    # Per-query details
-    lines.append("## Query Details")
+    # Per-question details
+    lines.append("## Question Details")
     lines.append("")
 
     for r in sorted_results:
-        lines.append(f"### {r.name} ({r.recall:.0%} recall, {r.precision:.0%} precision)")
-        lines.append("**Query text:**")
+        lines.append(f"### {r.name} ({r.recall:.0%} coverage, {r.precision:.0%} accuracy)")
+        lines.append("**Question text:**")
         query_text = queries.get(r.name, r.query)
         lines.append(f"> {query_text}")
         lines.append("")
-        lines.append(f"**Found {r.found} of {r.total_gold} gold sections.**")
+        lines.append(f"**Found {r.found} of {r.total_gold} reference passages.**")
         lines.append("")
 
         # Retrieved chunks table
         if r.retrieved_chunks:
-            lines.append("**Top retrieved chunks:**")
+            lines.append("**Top retrieved passages:**")
             lines.append("")
             lines.append("| Rank | Score | Document | Pages |")
             lines.append("|------|-------|----------|-------|")
@@ -161,7 +161,7 @@ def generate_report(
 
         # Missed sections with diagnosis
         if r.miss_details:
-            lines.append("**Missed sections with diagnosis:**")
+            lines.append("**Missed passages — why they weren't found:**")
             lines.append("")
             for i, detail in enumerate(r.miss_details, 1):
                 preview = detail.gold_text_preview.replace("\n", " ")
@@ -172,7 +172,7 @@ def generate_report(
                     overlap_pct = int(detail.overlap_ratio * 100)
                     gap = threshold_pct - overlap_pct
                     lines.append(
-                        f"   - Nearest chunk: #{chunk.rank} (score {chunk.score:.1%}) from {doc}"
+                        f"   - Nearest passage: #{chunk.rank} (score {chunk.score:.1%}) from {doc}"
                     )
                     lines.append(
                         f"   - {overlap_pct}% word overlap ({len(detail.overlapping_words)} content words) "
@@ -181,10 +181,10 @@ def generate_report(
                     sem = getattr(detail, "semantic_similarity", 0.0)
                     if sem > 0:
                         lines.append(
-                            f"   - Semantic similarity: {sem:.0%}"
+                            f"   - Meaning similarity: {sem:.0%}"
                         )
                 else:
-                    lines.append("   - No retrieved chunks to compare")
+                    lines.append("   - No retrieved passages to compare")
             lines.append("")
         elif r.missed_texts:
             lines.append("Missed:")

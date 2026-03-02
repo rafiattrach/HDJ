@@ -86,33 +86,33 @@ class TestGenerateReport:
     def test_report_contains_header(self, sample_data):
         result, queries, gold, config = sample_data
         report = generate_report([result], queries, gold, config)
-        assert "# HDJ RAG Evaluation Report" in report
+        assert "# Search Validation Report" in report
 
     def test_report_contains_config(self, sample_data):
         result, queries, gold, config = sample_data
         report = generate_report([result], queries, gold, config)
         assert "TestModel" in report
-        assert "256 tokens" in report
+        assert "~256 words" in report
 
     def test_report_contains_results_table(self, sample_data):
         result, queries, gold, config = sample_data
         report = generate_report([result], queries, gold, config)
-        assert "| Query | Recall | Precision | Found |" in report
+        assert "| Question | Coverage | Accuracy | Found |" in report
         assert "test_query" in report
         assert "1/2" in report
 
     def test_report_contains_gold_standard(self, sample_data):
         result, queries, gold, config = sample_data
         report = generate_report([result], queries, gold, config)
-        assert "## Gold Standard (2 sections)" in report
+        assert "## Reference Passages (2 passages)" in report
         assert "taylor.pdf" in report
 
     def test_report_contains_missed_diagnosis(self, sample_data):
         result, queries, gold, config = sample_data
         report = generate_report([result], queries, gold, config)
-        assert "Missed sections with diagnosis" in report
+        assert "Missed passages" in report
         assert "15% word overlap" in report
-        assert "Semantic similarity: 42%" in report
+        assert "Meaning similarity: 42%" in report
 
     def test_report_contains_indexed_pdfs(self, sample_data):
         result, queries, gold, config = sample_data
@@ -123,7 +123,7 @@ class TestGenerateReport:
     def test_report_decision_provenance(self, sample_data):
         result, queries, gold, config = sample_data
         report = generate_report([result], queries, gold, config)
-        assert "## Decision Provenance" in report
+        assert "## How Results Were Determined" in report
         assert "30%" in report
 
     def test_report_with_audit_trail(self, sample_data):
@@ -148,7 +148,7 @@ class TestGenerateReport:
             gold_standard=[],
             config={"indexed_pdfs": []},
         )
-        assert "# HDJ RAG Evaluation Report" in report
+        assert "# Search Validation Report" in report
         assert "## Results Summary" in report
 
     def test_report_multiple_queries_sorted(self):
@@ -177,7 +177,7 @@ class TestGenerateReport:
     def test_report_best_query_identified(self, sample_data):
         result, queries, gold, config = sample_data
         report = generate_report([result], queries, gold, config)
-        assert "Best query: test_query" in report
+        assert "Best question: test_query" in report
 
     def test_gold_standard_grouped_by_file(self):
         """Gold standard entries are grouped by source_file."""
@@ -192,5 +192,5 @@ class TestGenerateReport:
             found_texts=[], missed_texts=[],
         )
         report = generate_report([result], {"q": "q"}, gold, {"indexed_pdfs": []})
-        assert "### a.pdf (2 sections)" in report
-        assert "### b.pdf (1 sections)" in report
+        assert "### a.pdf (2 passages)" in report
+        assert "### b.pdf (1 passages)" in report
