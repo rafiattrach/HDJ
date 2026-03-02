@@ -8,6 +8,14 @@ __pycache__/
 # Database (rebuilds from PDFs)
 *.lancedb/
 
+# Runtime data
+data/audit_trail.json
+data/pdfs/
+data/defaults/pdfs/
+
+# Claude Code
+.claude/
+
 # OS
 .DS_Store
 
