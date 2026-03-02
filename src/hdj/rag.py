@@ -77,6 +77,21 @@ class HDJRag:
 
         return len(pdf_files)
 
+    async def clear_documents(self) -> None:
+        """Delete all indexed documents."""
+        docs = await self.client.list_documents()
+        for doc in docs:
+            await self.client.delete_document(doc.id)
+
+    async def index_single_pdf(self, pdf_path: Path) -> None:
+        """Index a single PDF document."""
+        await self.client.create_document_from_source(pdf_path)
+
+    async def document_count(self) -> int:
+        """Return the number of indexed documents."""
+        docs = await self.client.list_documents()
+        return len(docs)
+
     async def _raw_search(self, query: str, limit: int = 20) -> list[dict]:
         """Run a single search and return results as dicts (including chunk_id)."""
         results = await self.client.search(query, limit=limit)

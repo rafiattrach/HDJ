@@ -10,6 +10,7 @@ __pycache__/
 
 # Runtime data
 data/audit_trail.json
+data/collections.json
 data/gold_standard.json
 data/pdfs/
 data/defaults/pdfs/

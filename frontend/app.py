@@ -404,6 +404,115 @@ async def search_documents(query: str, limit: int = 10, cross_lingual: bool = Tr
         return await rag.search(query, limit=limit, cross_lingual=cross_lingual)
 
 
+def _do_build_index(force: bool) -> tuple[int, list[str]]:
+    """Build index with per-document progress tracking."""
+    pdfs = get_pdf_list()
+    pdf_names = [p.name for p in pdfs]
+    total = len(pdfs)
+
+    if total == 0:
+        return 0, []
+
+    progress = st.progress(0, text="Starting...")
+    status = st.status("Preparing documents...", expanded=True)
+
+    loop = asyncio.new_event_loop()
+    try:
+        rag = HDJRag(DB_PATH)
+        loop.run_until_complete(rag.__aenter__())
+        try:
+            doc_count = loop.run_until_complete(rag.document_count())
+
+            if not force and doc_count >= total:
+                status.update(label="Documents already prepared", state="complete")
+                progress.empty()
+                return doc_count, pdf_names
+
+            if force:
+                status.write("Clearing old index...")
+                loop.run_until_complete(rag.clear_documents())
+
+            for i, pdf in enumerate(pdfs):
+                progress.progress(
+                    i / total,
+                    text=f"Processing: {pdf.name} ({i + 1}/{total})",
+                )
+                status.write(f"📄 {pdf.name}")
+                loop.run_until_complete(rag.index_single_pdf(pdf))
+
+            progress.progress(1.0, text="Complete!")
+            status.update(
+                label=f"Prepared {total} documents", state="complete"
+            )
+            return total, pdf_names
+        finally:
+            loop.run_until_complete(rag.__aexit__(None, None, None))
+    finally:
+        loop.close()
+
+
+def _do_run_evaluation(
+    queries: dict[str, str],
+    limit: int,
+    overlap_threshold: float,
+    semantic_threshold: float,
+) -> list:
+    """Run evaluation with per-query progress tracking."""
+    evaluator = Evaluator.from_json(
+        GOLD_STANDARD_PATH,
+        overlap_threshold=overlap_threshold,
+        semantic_threshold=semantic_threshold,
+    )
+    total = len(queries)
+
+    progress = st.progress(0, text="Preparing...")
+    status = st.status("Running validation...", expanded=True)
+
+    loop = asyncio.new_event_loop()
+    try:
+        rag = HDJRag(DB_PATH)
+        loop.run_until_complete(rag.__aenter__())
+        try:
+            # Pre-compute gold embeddings (heavy, one-time step)
+            status.write("Computing reference passage embeddings...")
+            try:
+                evaluator._gold_embeddings = loop.run_until_complete(
+                    rag.embed_texts(evaluator.gold_standard)
+                )
+            except Exception:
+                status.write(
+                    "⚠️ Could not pre-compute embeddings (is Ollama running?)"
+                )
+
+            results = []
+            for i, (name, query) in enumerate(queries.items()):
+                progress.progress(
+                    i / total,
+                    text=f"Testing: {name} ({i + 1}/{total})",
+                )
+                result = loop.run_until_complete(
+                    evaluator.run_query(rag, name, query, limit)
+                )
+                results.append(result)
+                emoji = (
+                    "🟢" if result.recall >= 0.8
+                    else "🟡" if result.recall >= 0.5
+                    else "🔴"
+                )
+                status.write(
+                    f"{emoji} {name} — Coverage: {result.recall:.0%}"
+                )
+
+            save_results(results, RESULTS_DIR)
+            progress.progress(1.0, text="Complete!")
+            status.update(label="Validation complete!", state="complete")
+            return results
+        finally:
+            loop.run_until_complete(rag.__aexit__(None, None, None))
+    finally:
+        loop.close()
+
+
 _MATCH_TYPE_LABELS = {
     "substring": "exact text match",
     "word_overlap": "shared keywords",
@@ -596,24 +705,20 @@ with tab2:
     
     with col1:
         if st.button("🔨 Prepare Documents", disabled=len(pdfs) == 0, help="Prepare (skips existing)"):
-            with st.spinner("Preparing documents... This may take a few minutes."):
-                count, names = asyncio.run(build_index(force=False))
-                meta = save_index_meta(names)
-                st.session_state.indexed_pdfs = names
-                st.session_state.index_timestamp = meta["timestamp"]
-                log_event(AUDIT_PATH, "index_built", {"pdfs": names, "force": False})
-            st.success(f"Done! {count} passages from {len(names)} PDFs.")
+            count, names = _do_build_index(force=False)
+            meta = save_index_meta(names)
+            st.session_state.indexed_pdfs = names
+            st.session_state.index_timestamp = meta["timestamp"]
+            log_event(AUDIT_PATH, "index_built", {"pdfs": names, "force": False})
             st.rerun()
 
     with col2:
         if st.button("🔄 Re-prepare Documents", disabled=len(pdfs) == 0, help="Delete and rebuild from scratch"):
-            with st.spinner("Re-preparing documents..."):
-                count, names = asyncio.run(build_index(force=True))
-                meta = save_index_meta(names)
-                st.session_state.indexed_pdfs = names
-                st.session_state.index_timestamp = meta["timestamp"]
-                log_event(AUDIT_PATH, "index_built", {"pdfs": names, "force": True})
-            st.success(f"Done! {count} passages from {len(names)} PDFs.")
+            count, names = _do_build_index(force=True)
+            meta = save_index_meta(names)
+            st.session_state.indexed_pdfs = names
+            st.session_state.index_timestamp = meta["timestamp"]
+            log_event(AUDIT_PATH, "index_built", {"pdfs": names, "force": True})
             st.rerun()
 
 
@@ -857,26 +962,20 @@ with tab4:
     if st.button("▶️ Run Validation", disabled=not can_run):
         # Clear old results first
         st.session_state.eval_results = None
-        with st.spinner("Running validation..."):
-            results = asyncio.run(
-                run_evaluation(
-                    queries,
-                    limit,
-                    overlap_threshold=overlap_threshold,
-                    semantic_threshold=semantic_threshold,
-                )
-            )
-            st.session_state.eval_results = results
-            best = max(results, key=lambda r: r.recall)
-            log_event(AUDIT_PATH, "evaluation_run", {
-                "query_names": list(queries.keys()),
-                "gold_sections_count": len(gold),
-                "results_limit": limit,
-                "overlap_threshold": overlap_threshold,
-                "semantic_threshold": semantic_threshold,
-                "best_query": best.name,
-                "best_recall": round(best.recall, 3),
-            })
+        results = _do_run_evaluation(
+            queries, limit, overlap_threshold, semantic_threshold,
+        )
+        st.session_state.eval_results = results
+        best = max(results, key=lambda r: r.recall)
+        log_event(AUDIT_PATH, "evaluation_run", {
+            "query_names": list(queries.keys()),
+            "gold_sections_count": len(gold),
+            "results_limit": limit,
+            "overlap_threshold": overlap_threshold,
+            "semantic_threshold": semantic_threshold,
+            "best_query": best.name,
+            "best_recall": round(best.recall, 3),
+        })
         st.rerun()
     
     # Results
@@ -1157,10 +1256,20 @@ with tab3:
                         label_visibility="collapsed",
                         placeholder="Save to collection...",
                     )
+                    if selected_col == "+ New collection...":
+                        new_col_name = st.text_input(
+                            "Collection name",
+                            key=f"new_col_name_{i}",
+                            placeholder="Enter collection name...",
+                        )
                     if st.button("📌 Save Passage", key=f"save_{i}"):
                         target_collection = selected_col
                         if selected_col == "+ New collection...":
-                            target_collection = f"Collection {len(existing_collections) + 1}"
+                            new_col_name = st.session_state.get(f"new_col_name_{i}", "").strip()
+                            if not new_col_name:
+                                st.warning("Please enter a name for the new collection.")
+                                st.stop()
+                            target_collection = new_col_name
                         search_q = st.session_state.get("search_query", "")
                         add_to_collection(target_collection, {
                             "content": content,
