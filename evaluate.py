@@ -26,6 +26,13 @@ def load_queries() -> dict[str, str]:
         return json.load(f)
 
 
+def _pretty_name(uri: str | None) -> str:
+    if not uri:
+        return "?"
+    from pathlib import PurePosixPath
+    return PurePosixPath(uri).name or uri
+
+
 def print_result(r: QueryResult) -> None:
     """Print a single query result."""
     print(f"\n{'─' * 50}")
@@ -33,7 +40,21 @@ def print_result(r: QueryResult) -> None:
     print(f"  Recall:    {r.found}/{r.total_gold} ({r.recall:.1%})")
     print(f"  Precision: {r.found}/{r.retrieved} ({r.precision:.1%})")
 
-    if r.missed_texts:
+    if r.miss_details:
+        print(f"\n  Missed ({len(r.miss_details)}):")
+        for i, detail in enumerate(r.miss_details[:5]):
+            preview = detail.gold_text_preview[:80].replace("\n", " ")
+            print(f"    {i+1}. {preview}...")
+            if detail.matched_chunk:
+                chunk = detail.matched_chunk
+                doc = _pretty_name(chunk.document_uri)
+                print(
+                    f"       Nearest: #{chunk.rank} ({chunk.score:.1%}) from {doc} "
+                    f"— {detail.overlap_ratio:.0%} overlap ({len(detail.overlapping_words)} words)"
+                )
+        if len(r.miss_details) > 5:
+            print(f"    ... and {len(r.miss_details) - 5} more")
+    elif r.missed_texts:
         print(f"\n  Missed ({len(r.missed_texts)}):")
         for t in r.missed_texts[:3]:
             print(f"    - {t[:80]}...")

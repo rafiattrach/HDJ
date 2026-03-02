@@ -1,11 +1,46 @@
 """Evaluation logic for RAG retrieval quality."""
 
 import json
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 from datetime import datetime
 from pathlib import Path
 
 from .rag import HDJRag
+
+
+@dataclass
+class RetrievedChunk:
+    """A single RAG search result with full metadata."""
+    content: str
+    score: float
+    rank: int  # 1-based
+    document_uri: str | None = None
+    page_numbers: list[int] = field(default_factory=list)
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+@dataclass
+class OverlapDetail:
+    """How a gold passage matched (or nearly matched) a chunk."""
+    gold_text: str
+    gold_text_preview: str
+    matched_chunk: RetrievedChunk | None = None
+    overlap_ratio: float = 0.0
+    overlapping_words: list[str] = field(default_factory=list)
+    match_type: str = "none"  # "substring" | "word_overlap" | "none"
+
+    def to_dict(self) -> dict:
+        d = {
+            "gold_text": self.gold_text,
+            "gold_text_preview": self.gold_text_preview,
+            "matched_chunk": self.matched_chunk.to_dict() if self.matched_chunk else None,
+            "overlap_ratio": self.overlap_ratio,
+            "overlapping_words": self.overlapping_words,
+            "match_type": self.match_type,
+        }
+        return d
 
 
 @dataclass
@@ -20,9 +55,20 @@ class QueryResult:
     retrieved: int
     found_texts: list[str]
     missed_texts: list[str]
+    retrieved_chunks: list[RetrievedChunk] | None = None
+    match_details: list[OverlapDetail] | None = None
+    miss_details: list[OverlapDetail] | None = None
 
     def to_dict(self) -> dict:
-        return asdict(self)
+        d = asdict(self)
+        # Use custom serialization for the new fields
+        if self.retrieved_chunks is not None:
+            d["retrieved_chunks"] = [c.to_dict() for c in self.retrieved_chunks]
+        if self.match_details is not None:
+            d["match_details"] = [m.to_dict() for m in self.match_details]
+        if self.miss_details is not None:
+            d["miss_details"] = [m.to_dict() for m in self.miss_details]
+        return d
 
 
 class Evaluator:
@@ -40,39 +86,92 @@ class Evaluator:
         texts = [item["text"] for item in data]
         return cls(texts, overlap_threshold)
 
-    def _text_overlap(self, retrieved: str, gold: str) -> bool:
-        """Check if texts overlap significantly."""
+    def _text_overlap(
+        self, retrieved: str, gold: str
+    ) -> tuple[bool, float, list[str], str]:
+        """Check if texts overlap significantly.
+
+        Returns (is_match, overlap_ratio, overlapping_words, match_type).
+        """
         retrieved_lower = retrieved.lower()
         gold_lower = gold.lower()
 
-        if gold_lower in retrieved_lower or retrieved_lower in gold_lower:
-            return True
-
         gold_words = set(gold_lower.split())
-        retrieved_words = set(retrieved_lower.split())
 
         if not gold_words:
-            return False
+            return (False, 0.0, [], "none")
 
-        overlap = len(gold_words & retrieved_words) / len(gold_words)
-        return overlap >= self.overlap_threshold
+        if gold_lower in retrieved_lower or retrieved_lower in gold_lower:
+            return (True, 1.0, sorted(gold_words), "substring")
 
-    def evaluate(self, name: str, query: str, retrieved_texts: list[str]) -> QueryResult:
+        retrieved_words = set(retrieved_lower.split())
+        common = gold_words & retrieved_words
+        ratio = len(common) / len(gold_words)
+
+        if ratio >= self.overlap_threshold:
+            return (True, ratio, sorted(common), "word_overlap")
+
+        return (False, ratio, sorted(common), "none")
+
+    def evaluate(
+        self,
+        name: str,
+        query: str,
+        retrieved_texts: list[str],
+        retrieved_chunks: list[RetrievedChunk] | None = None,
+    ) -> QueryResult:
         """Evaluate retrieved texts against gold standard."""
+        # Build chunks list — synthetic from texts if not provided
+        if retrieved_chunks is not None:
+            chunks = retrieved_chunks
+        else:
+            chunks = [
+                RetrievedChunk(content=t, score=0.0, rank=i + 1)
+                for i, t in enumerate(retrieved_texts)
+            ]
+
         found_texts = []
         missed_texts = []
+        match_details = []
+        miss_details = []
 
         for gold in self.gold_standard:
-            match = any(self._text_overlap(ret, gold) for ret in retrieved_texts)
             truncated = gold[:150] + "..." if len(gold) > 150 else gold
-            if match:
+
+            best_ratio = -1.0
+            best_words: list[str] = []
+            best_type = "none"
+            best_chunk: RetrievedChunk | None = None
+
+            for chunk in chunks:
+                is_match, ratio, words, mtype = self._text_overlap(chunk.content, gold)
+                if ratio > best_ratio:
+                    best_ratio = ratio
+                    best_words = words
+                    best_type = mtype
+                    best_chunk = chunk
+
+            is_found = best_type != "none"
+
+            detail = OverlapDetail(
+                gold_text=gold,
+                gold_text_preview=truncated,
+                matched_chunk=best_chunk,
+                overlap_ratio=best_ratio if best_ratio >= 0 else 0.0,
+                overlapping_words=best_words,
+                match_type=best_type,
+            )
+
+            if is_found:
                 found_texts.append(truncated)
+                match_details.append(detail)
             else:
                 missed_texts.append(truncated)
+                miss_details.append(detail)
 
         found = len(found_texts)
         total = len(self.gold_standard)
-        retrieved = len(retrieved_texts)
+        retrieved = len(chunks)
 
         return QueryResult(
             name=name,
@@ -84,6 +183,9 @@ class Evaluator:
             retrieved=retrieved,
             found_texts=found_texts,
             missed_texts=missed_texts,
+            retrieved_chunks=chunks,
+            match_details=match_details,
+            miss_details=miss_details,
         )
 
     async def run_query(
@@ -91,8 +193,18 @@ class Evaluator:
     ) -> QueryResult:
         """Run query through RAG and evaluate results."""
         results = await rag.search(query, limit=limit)
-        retrieved_texts = [r["content"] for r in results]
-        return self.evaluate(name, query, retrieved_texts)
+        chunks = [
+            RetrievedChunk(
+                content=r["content"],
+                score=r.get("score", 0.0),
+                rank=i + 1,
+                document_uri=r.get("document_uri"),
+                page_numbers=r.get("page_numbers", []),
+            )
+            for i, r in enumerate(results)
+        ]
+        retrieved_texts = [c.content for c in chunks]
+        return self.evaluate(name, query, retrieved_texts, retrieved_chunks=chunks)
 
 
 def save_results(results: list[QueryResult], output_dir: Path) -> Path:

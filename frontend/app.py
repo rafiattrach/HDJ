@@ -3,7 +3,9 @@ Health Data Justice - RAG Evaluation Interface
 """
 
 import asyncio
+import html as html_mod
 import json
+import re
 import shutil
 from datetime import datetime
 from pathlib import Path
@@ -15,7 +17,8 @@ import streamlit as st
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.hdj import HDJRag, Evaluator
+from src.hdj import HDJRag, Evaluator, log_event, load_events, generate_report
+from src.hdj.audit import clear_events
 from src.hdj.evaluate import save_results
 
 # Paths
@@ -31,6 +34,7 @@ DEFAULT_QUERIES_PATH = DEFAULTS_DIR / "queries.json"
 RESULTS_DIR = ROOT / "results"
 DB_PATH = ROOT / "hdj.lancedb"
 INDEX_META_PATH = ROOT / "index_meta.json"
+AUDIT_PATH = DATA_DIR / "audit_trail.json"
 
 # Page config
 st.set_page_config(
@@ -162,10 +166,52 @@ st.markdown("""
         color: #1a1a1a !important; 
     }
     
+    /* Multiselect tags - white text on dark pills */
+    [data-baseweb="tag"] span { color: #ffffff !important; }
+    [data-baseweb="tag"] svg { fill: #ffffff !important; }
+
     /* Hide branding */
     #MainMenu, footer { visibility: hidden; }
     
     hr { margin: 1.5rem 0; border: none; border-top: 1px solid #e5e7eb; }
+
+    /* Overlap highlighting */
+    .overlap-hit {
+        background-color: #bbf7d0;
+        padding: 1px 2px;
+        border-radius: 2px;
+        color: #166534 !important;
+    }
+    .overlap-miss {
+        background-color: #fecaca;
+        padding: 2px 4px;
+        border-radius: 3px;
+        color: #991b1b !important;
+        font-size: 0.875rem;
+        line-height: 1.6;
+    }
+    .score-badge {
+        display: inline-block;
+        background-color: #dbeafe;
+        color: #1e40af !important;
+        padding: 2px 8px;
+        border-radius: 12px;
+        font-size: 0.75rem;
+        font-weight: 600;
+    }
+    .rank-badge {
+        display: inline-block;
+        background-color: #ede9fe;
+        color: #6d28d9 !important;
+        padding: 2px 8px;
+        border-radius: 12px;
+        font-size: 0.75rem;
+        font-weight: 600;
+    }
+    .chunk-meta {
+        font-size: 0.75rem;
+        color: #9ca3af !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -237,6 +283,9 @@ def save_index_meta(pdfs: list[str]):
 
 def reset_to_defaults():
     """Reset everything to defaults."""
+    log_event(AUDIT_PATH, "reset_all")
+    clear_events(AUDIT_PATH)
+
     # Reset gold standard
     if DEFAULT_GOLD_STANDARD_PATH.exists():
         shutil.copy(DEFAULT_GOLD_STANDARD_PATH, GOLD_STANDARD_PATH)
@@ -340,6 +389,25 @@ def _pretty_doc_name(document_uri: str | None) -> str:
         return document_uri
 
 
+def highlight_overlap(text: str, overlapping_words: list[str]) -> str:
+    """Return HTML with overlapping words wrapped in highlight spans."""
+    if not overlapping_words:
+        return html_mod.escape(text)
+
+    word_set = {w.lower() for w in overlapping_words}
+    # Split on word boundaries but keep delimiters (punctuation/spaces)
+    tokens = re.split(r'(\W+)', text)
+    parts = []
+    for token in tokens:
+        # Strip punctuation for matching but preserve original token
+        stripped = re.sub(r'[^\w]', '', token).lower()
+        if stripped and stripped in word_set:
+            parts.append(f'<span class="overlap-hit">{html_mod.escape(token)}</span>')
+        else:
+            parts.append(html_mod.escape(token))
+    return "".join(parts)
+
+
 # ============ Main App ============
 
 init_state()
@@ -366,11 +434,12 @@ with col2:
 st.divider()
 
 # ===== TABS =====
-tab1, tab2, tab3, tab4 = st.tabs([
-    "1️⃣ Documents", 
-    "2️⃣ Build Index", 
-    "3️⃣ Evaluate", 
-    "4️⃣ Search"
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    "1. Documents",
+    "2. Build Index",
+    "3. Evaluate",
+    "4. Search",
+    "5. Activity Log",
 ])
 
 
@@ -394,6 +463,7 @@ with tab1:
             if not dest.exists():
                 with open(dest, "wb") as out:
                     out.write(f.getbuffer())
+                log_event(AUDIT_PATH, "pdf_uploaded", {"filename": f.name})
                 st.success(f"✓ Added {f.name}")
     
     # Current PDFs
@@ -413,6 +483,7 @@ with tab1:
                     st.markdown(f"📄 {pdf.name} _(not indexed)_")
             with col3:
                 if st.button("🗑️", key=f"del_{pdf.name}", help="Remove this PDF"):
+                    log_event(AUDIT_PATH, "pdf_deleted", {"filename": pdf.name})
                     pdf.unlink()
                     # Warn if it was indexed
                     if pdf.name in indexed_pdfs:
@@ -475,9 +546,10 @@ with tab2:
                 meta = save_index_meta(names)
                 st.session_state.indexed_pdfs = names
                 st.session_state.index_timestamp = meta["timestamp"]
+                log_event(AUDIT_PATH, "index_built", {"pdfs": names, "force": False})
             st.success(f"Done! {count} chunks from {len(names)} PDFs.")
             st.rerun()
-    
+
     with col2:
         if st.button("🔄 Rebuild Index", disabled=len(pdfs) == 0, help="Delete and rebuild from scratch"):
             with st.spinner("Rebuilding index..."):
@@ -485,6 +557,7 @@ with tab2:
                 meta = save_index_meta(names)
                 st.session_state.indexed_pdfs = names
                 st.session_state.index_timestamp = meta["timestamp"]
+                log_event(AUDIT_PATH, "index_built", {"pdfs": names, "force": True})
             st.success(f"Done! {count} chunks from {len(names)} PDFs.")
             st.rerun()
 
@@ -563,10 +636,18 @@ with tab3:
                         if st.button("💾 Save", key=f"gs_save_{idx}"):
                             gold[idx]["text"] = new_text
                             save_gold_standard(gold)
+                            log_event(AUDIT_PATH, "gold_standard_edited", {
+                                "source_file": entry.get("source_file", "unknown"),
+                                "text_preview": new_text[:100],
+                            })
                             st.success("Saved!")
                             st.rerun()
                     with col2:
                         if st.button("🗑️ Delete", key=f"gs_del_{idx}"):
+                            log_event(AUDIT_PATH, "gold_standard_deleted", {
+                                "source_file": entry.get("source_file", "unknown"),
+                                "text_preview": entry.get("text", "")[:100],
+                            })
                             del gold[idx]
                             save_gold_standard(gold)
                             st.rerun()
@@ -595,6 +676,10 @@ with tab3:
                     }
                 )
                 save_gold_standard(gold)
+                log_event(AUDIT_PATH, "gold_standard_added", {
+                    "source_file": new_file,
+                    "text_preview": new_text.strip()[:100],
+                })
                 st.success("Added!")
                 st.rerun()
             else:
@@ -624,10 +709,15 @@ with tab3:
                     if st.button("💾 Save", key=f"q_save_{name}"):
                         queries[name] = new_text
                         save_queries(queries)
+                        log_event(AUDIT_PATH, "query_edited", {
+                            "name": name,
+                            "text_preview": new_text[:100],
+                        })
                         st.success("Saved!")
                         st.rerun()
                 with col2:
                     if st.button("🗑️ Delete", key=f"q_del_{name}"):
+                        log_event(AUDIT_PATH, "query_deleted", {"name": name})
                         del queries[name]
                         save_queries(queries)
                         st.rerun()
@@ -645,6 +735,10 @@ with tab3:
     if st.button("➕ Add Query") and new_q_name and new_q_text:
         queries[new_q_name] = new_q_text
         save_queries(queries)
+        log_event(AUDIT_PATH, "query_added", {
+            "name": new_q_name,
+            "text_preview": new_q_text[:100],
+        })
         st.success(f"Added '{new_q_name}'")
         st.rerun()
     
@@ -698,6 +792,15 @@ with tab3:
                 run_evaluation(queries, limit, overlap_threshold=overlap_threshold)
             )
             st.session_state.eval_results = results
+            best = max(results, key=lambda r: r.recall)
+            log_event(AUDIT_PATH, "evaluation_run", {
+                "query_names": list(queries.keys()),
+                "gold_sections_count": len(gold),
+                "results_limit": limit,
+                "overlap_threshold": overlap_threshold,
+                "best_query": best.name,
+                "best_recall": round(best.recall, 3),
+            })
         st.rerun()
     
     # Results
@@ -730,14 +833,111 @@ with tab3:
             with st.expander(f"📊 {r.name} — {r.recall:.0%} recall"):
                 st.markdown("**Query:**")
                 st.text_area("", value=r.query, height=80, disabled=True, key=f"res_q_{r.name}", label_visibility="collapsed")
-                
-                if r.missed_texts:
+
+                # Retrieved chunks summary
+                if r.retrieved_chunks:
+                    with st.expander(f"📦 Retrieved Chunks ({len(r.retrieved_chunks)})", expanded=False):
+                        for chunk in r.retrieved_chunks[:20]:
+                            doc = _pretty_doc_name(chunk.document_uri)
+                            pages = ", ".join(map(str, chunk.page_numbers)) if chunk.page_numbers else "—"
+                            preview = chunk.content[:120].replace("\n", " ")
+                            if len(chunk.content) > 120:
+                                preview += "..."
+                            st.markdown(
+                                f'<span class="rank-badge">#{chunk.rank}</span> '
+                                f'<span class="score-badge">{chunk.score:.1%}</span> '
+                                f'{html_mod.escape(doc)} · Pages {pages}<br>'
+                                f'<span class="chunk-meta">{html_mod.escape(preview)}</span>',
+                                unsafe_allow_html=True,
+                            )
+                            st.markdown("---")
+
+                # Matched sections
+                if r.match_details:
+                    st.markdown(f"**Matched sections ({len(r.match_details)}):**")
+                    for i, detail in enumerate(r.match_details):
+                        with st.expander(f"Match {i+1} — {detail.match_type} · {detail.overlap_ratio:.0%} overlap", expanded=False):
+                            col_g, col_c = st.columns(2)
+                            with col_g:
+                                st.markdown("**Gold passage:**")
+                                highlighted = highlight_overlap(detail.gold_text_preview, detail.overlapping_words)
+                                st.markdown(highlighted, unsafe_allow_html=True)
+                            with col_c:
+                                if detail.matched_chunk:
+                                    chunk = detail.matched_chunk
+                                    st.markdown("**Best matching chunk:**")
+                                    st.markdown(
+                                        f'<span class="rank-badge">#{chunk.rank}</span> '
+                                        f'<span class="score-badge">{chunk.score:.1%}</span>',
+                                        unsafe_allow_html=True,
+                                    )
+                                    chunk_preview = chunk.content[:200].replace("\n", " ")
+                                    if len(chunk.content) > 200:
+                                        chunk_preview += "..."
+                                    chunk_highlighted = highlight_overlap(chunk_preview, detail.overlapping_words)
+                                    st.markdown(chunk_highlighted, unsafe_allow_html=True)
+
+                # Missed sections
+                if r.miss_details:
+                    st.markdown(f"**Missed sections ({len(r.miss_details)}):**")
+                    for i, detail in enumerate(r.miss_details):
+                        with st.expander(f"Missed {i+1} — {detail.overlap_ratio:.0%} overlap with nearest chunk", expanded=True):
+                            st.markdown(
+                                f'<div class="overlap-miss">{html_mod.escape(detail.gold_text_preview)}</div>',
+                                unsafe_allow_html=True,
+                            )
+                            if detail.matched_chunk:
+                                chunk = detail.matched_chunk
+                                doc = _pretty_doc_name(chunk.document_uri)
+                                st.markdown(
+                                    f'**Nearest chunk:** '
+                                    f'<span class="rank-badge">#{chunk.rank}</span> '
+                                    f'<span class="score-badge">{chunk.score:.1%}</span> '
+                                    f'· {html_mod.escape(doc)}',
+                                    unsafe_allow_html=True,
+                                )
+                                st.markdown(
+                                    f"**{detail.overlap_ratio:.0%}** overlap "
+                                    f"({len(detail.overlapping_words)} words) — "
+                                    f"below {int(overlap_threshold * 100)}% threshold"
+                                )
+                                chunk_preview = chunk.content[:200].replace("\n", " ")
+                                if len(chunk.content) > 200:
+                                    chunk_preview += "..."
+                                st.text_area("", value=chunk_preview, height=100, disabled=True, key=f"miss_chunk_{r.name}_{i}", label_visibility="collapsed")
+                            else:
+                                st.markdown("No chunks retrieved.")
+                elif r.missed_texts:
+                    # Fallback for old-format results
                     st.markdown(f"**Missed sections ({len(r.missed_texts)}):**")
                     for i, text in enumerate(r.missed_texts):
                         with st.expander(f"Missed {i+1} ({len(text)} chars)", expanded=True):
-                            # Calculate height based on text length (roughly 80 chars per line, 20px per line)
-                            lines = max(5, min(20, len(text) // 80 + 3))
-                            st.text_area("", value=text, height=lines * 25, disabled=True, key=f"missed_{r.name}_{i}", label_visibility="collapsed")
+                            num_lines = max(5, min(20, len(text) // 80 + 3))
+                            st.text_area("", value=text, height=num_lines * 25, disabled=True, key=f"missed_{r.name}_{i}", label_visibility="collapsed")
+
+        # Export Report button
+        st.divider()
+        report_config = {
+            "embedding_model": "Qwen3-Embedding-4B (via Ollama)",
+            "chunk_size": 512,
+            "search_method": "Hybrid (vector + full-text with RRF reranking)",
+            "results_limit": limit,
+            "overlap_threshold": overlap_threshold,
+            "indexed_pdfs": list(index_meta.get("pdfs", [])),
+        }
+        report_md = generate_report(
+            results=results,
+            queries=queries,
+            gold_standard=gold,
+            config=report_config,
+            audit_events=load_events(AUDIT_PATH),
+        )
+        st.download_button(
+            "📥 Export Report",
+            data=report_md,
+            file_name=f"hdj_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md",
+            mime="text/markdown",
+        )
 
 
 # ============ TAB 4: Search ============
@@ -766,24 +966,34 @@ with tab4:
         with st.spinner("Searching..."):
             results = asyncio.run(search_documents(query, limit))
             st.session_state.search_results = results
+            log_event(AUDIT_PATH, "search_performed", {
+                "query_preview": query[:100],
+                "results_count": len(results),
+                "limit": limit,
+            })
         st.rerun()
     
     if st.session_state.search_results:
         st.divider()
         results = st.session_state.search_results
         st.markdown(f"**Found {len(results)} sections:**")
-        
+
         for i, r in enumerate(results):
             pages = r.get("page_numbers", [])
             content = r.get("content", "")
+            score = r.get("score", 0.0)
             doc = _pretty_doc_name(r.get("document_uri"))
 
-            label = f"Result {i+1}"
-            label += f" · {doc}"
+            label = f"Result {i+1} · {score:.1%} · {doc}"
             if pages:
                 label += f" · Pages {', '.join(map(str, pages))}"
 
             with st.expander(label, expanded=i < 3):
+                st.markdown(
+                    f'<span class="rank-badge">#{i+1}</span> '
+                    f'<span class="score-badge">{score:.1%}</span>',
+                    unsafe_allow_html=True,
+                )
                 st.text_area(
                     "",
                     value=content,
@@ -792,6 +1002,109 @@ with tab4:
                     key=f"search_{i}",
                     label_visibility="collapsed",
                 )
+
+
+# ============ TAB 5: Activity Log ============
+with tab5:
+    st.header("Activity Log")
+
+    show_info("All actions taken in this tool are logged here for transparency and reproducibility.")
+
+    audit_events = load_events(AUDIT_PATH)
+
+    # Action type filter
+    if audit_events:
+        all_actions = sorted({e.get("action", "") for e in audit_events})
+        selected_actions = st.multiselect(
+            "Filter by action type",
+            options=all_actions,
+            default=all_actions,
+        )
+
+        filtered = [e for e in audit_events if e.get("action") in selected_actions]
+        filtered.reverse()  # newest first
+
+        st.markdown(f"**{len(filtered)} events** (of {len(audit_events)} total)")
+
+        ACTION_LABELS = {
+            "pdf_uploaded": "PDF Uploaded",
+            "pdf_deleted": "PDF Deleted",
+            "index_built": "Index Built",
+            "gold_standard_added": "Gold Standard Added",
+            "gold_standard_edited": "Gold Standard Edited",
+            "gold_standard_deleted": "Gold Standard Deleted",
+            "query_added": "Query Added",
+            "query_edited": "Query Edited",
+            "query_deleted": "Query Deleted",
+            "evaluation_run": "Evaluation Run",
+            "search_performed": "Search Performed",
+            "reset_all": "Reset All",
+        }
+
+        for event in filtered:
+            ts = event.get("timestamp", "")
+            action = event.get("action", "")
+            details = event.get("details", {})
+            label = ACTION_LABELS.get(action, action)
+
+            # Build a compact details summary
+            parts = []
+            for k, v in details.items():
+                if isinstance(v, list):
+                    parts.append(f"{k}: {', '.join(str(x) for x in v)}")
+                elif isinstance(v, str) and len(v) > 60:
+                    parts.append(f"{k}: {v[:60]}...")
+                else:
+                    parts.append(f"{k}: {v}")
+            detail_str = " · ".join(parts) if parts else ""
+
+            try:
+                ts_formatted = datetime.fromisoformat(ts).strftime("%Y-%m-%d %H:%M:%S")
+            except (ValueError, TypeError):
+                ts_formatted = ts
+
+            if detail_str:
+                st.markdown(f"`{ts_formatted}` **{label}** — {detail_str}")
+            else:
+                st.markdown(f"`{ts_formatted}` **{label}**")
+
+        st.divider()
+
+        # Export as Markdown
+        export_lines = ["# HDJ Activity Log", ""]
+        for event in filtered:
+            ts = event.get("timestamp", "")
+            action = event.get("action", "")
+            details = event.get("details", {})
+            label = ACTION_LABELS.get(action, action)
+            parts = []
+            for k, v in details.items():
+                if isinstance(v, list):
+                    parts.append(f"{k}: {', '.join(str(x) for x in v)}")
+                else:
+                    parts.append(f"{k}: {v}")
+            detail_str = " · ".join(parts) if parts else ""
+            if detail_str:
+                export_lines.append(f"- **{ts}** — {label} ({detail_str})")
+            else:
+                export_lines.append(f"- **{ts}** — {label}")
+
+        col1, col2 = st.columns(2)
+        with col1:
+            st.download_button(
+                "📥 Export Activity Log",
+                data="\n".join(export_lines),
+                file_name=f"hdj_activity_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md",
+                mime="text/markdown",
+            )
+        with col2:
+            st.markdown('<div class="danger-btn">', unsafe_allow_html=True)
+            if st.button("🗑️ Clear Log"):
+                clear_events(AUDIT_PATH)
+                st.rerun()
+            st.markdown('</div>', unsafe_allow_html=True)
+    else:
+        st.info("No activity recorded yet. Actions will appear here as you use the tool.")
 
 
 # Footer

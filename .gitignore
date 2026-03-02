@@ -10,8 +10,10 @@ __pycache__/
 
 # Runtime data
 data/audit_trail.json
+data/gold_standard.json
 data/pdfs/
 data/defaults/pdfs/
+results/
 
 # Claude Code
 .claude/
