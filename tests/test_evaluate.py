@@ -11,6 +11,8 @@ from hdj.evaluate import (
     QueryResult,
     save_results,
     STOPWORDS,
+    GERMAN_STOPWORDS,
+    ALL_STOPWORDS,
 )
 
 
@@ -493,3 +495,111 @@ class TestFromJson:
         path.write_text(json.dumps(gs))
         ev = Evaluator.from_json(path, overlap_threshold=0.8)
         assert ev.overlap_threshold == 0.8
+
+    def test_custom_semantic_threshold(self, tmp_path):
+        gs = [{"source_file": "a.pdf", "text": "text"}]
+        path = tmp_path / "gold.json"
+        path.write_text(json.dumps(gs))
+        ev = Evaluator.from_json(path, semantic_threshold=0.9)
+        assert ev.semantic_threshold == 0.9
+
+
+# ---------------------------------------------------------------------------
+# German stopwords — bilingual filtering
+# ---------------------------------------------------------------------------
+
+class TestGermanStopwords:
+    def test_german_function_words_filtered(self):
+        """Common German function words should be stripped by _content_words."""
+        text = "der die das und ist für mit auf den dem ein eine"
+        words = Evaluator._content_words(text)
+        assert words == set()
+
+    def test_german_content_words_retained(self):
+        text = "Gesundheitsdaten Algorithmus Diskriminierung"
+        words = Evaluator._content_words(text)
+        assert words == {"gesundheitsdaten", "algorithmus", "diskriminierung"}
+
+    def test_mixed_language_filtering(self):
+        """Both English and German stopwords are filtered, content words retained."""
+        text = "the Gesundheitsdaten are being used durch die Regierung"
+        words = Evaluator._content_words(text)
+        assert "the" not in words
+        assert "are" not in words
+        assert "die" not in words
+        assert "durch" not in words
+        assert "gesundheitsdaten" in words
+        assert "regierung" in words
+
+    def test_all_stopwords_is_union(self):
+        """ALL_STOPWORDS should be the union of STOPWORDS and GERMAN_STOPWORDS."""
+        assert ALL_STOPWORDS == STOPWORDS | GERMAN_STOPWORDS
+
+    def test_german_stopwords_frozenset(self):
+        assert isinstance(GERMAN_STOPWORDS, frozenset)
+        assert "der" in GERMAN_STOPWORDS
+        assert "die" in GERMAN_STOPWORDS
+        assert "und" in GERMAN_STOPWORDS
+        assert "für" in GERMAN_STOPWORDS
+
+
+# ---------------------------------------------------------------------------
+# Semantic match type — cross-lingual fallback
+# ---------------------------------------------------------------------------
+
+class TestSemanticMatchType:
+    def test_semantic_fallback_triggers_on_high_similarity(self):
+        """When word overlap fails but semantic sim >= threshold, match as 'semantic'."""
+        gold = ["Gesundheitsdaten werden verarbeitet"]
+        ev = Evaluator(gold, overlap_threshold=0.3, semantic_threshold=0.75)
+        # Retrieved chunk shares zero content words with German gold
+        retrieved = ["health data is being processed"]
+        # High semantic similarity
+        sem_matrix = np.array([[0.85]])
+        result = ev.evaluate("test", "query", retrieved, semantic_matrix=sem_matrix)
+        assert result.found == 1
+        assert result.recall == 1.0
+        assert result.match_details[0].match_type == "semantic"
+        assert result.match_details[0].semantic_similarity == pytest.approx(0.85)
+
+    def test_semantic_fallback_does_not_trigger_below_threshold(self):
+        """Semantic sim below threshold should NOT upgrade to a match."""
+        gold = ["Gesundheitsdaten werden verarbeitet"]
+        ev = Evaluator(gold, overlap_threshold=0.3, semantic_threshold=0.75)
+        retrieved = ["unrelated text about cooking recipes"]
+        sem_matrix = np.array([[0.50]])
+        result = ev.evaluate("test", "query", retrieved, semantic_matrix=sem_matrix)
+        assert result.found == 0
+        assert result.recall == 0.0
+        assert result.miss_details[0].match_type == "none"
+
+    def test_word_overlap_takes_precedence_over_semantic(self):
+        """Word overlap match should be preferred even when semantic is also high."""
+        gold = ["discrimination affects communities"]
+        ev = Evaluator(gold, overlap_threshold=0.3, semantic_threshold=0.75)
+        retrieved = ["discrimination impacts the poorest communities worldwide"]
+        sem_matrix = np.array([[0.95]])
+        result = ev.evaluate("test", "query", retrieved, semantic_matrix=sem_matrix)
+        assert result.found == 1
+        assert result.match_details[0].match_type == "word_overlap"
+
+    def test_semantic_match_picks_best_chunk(self):
+        """Semantic fallback should use the chunk with highest semantic similarity."""
+        gold = ["Datenschutz im Gesundheitswesen"]
+        ev = Evaluator(gold, overlap_threshold=0.3, semantic_threshold=0.75)
+        retrieved = ["unrelated text", "data protection in healthcare"]
+        # Second chunk has higher semantic similarity
+        sem_matrix = np.array([[0.30, 0.90]])
+        result = ev.evaluate("test", "query", retrieved, semantic_matrix=sem_matrix)
+        assert result.found == 1
+        assert result.match_details[0].match_type == "semantic"
+        assert result.match_details[0].matched_chunk.content == "data protection in healthcare"
+
+    def test_no_semantic_matrix_no_fallback(self):
+        """Without a semantic matrix, no semantic fallback should occur."""
+        gold = ["Gesundheitsdaten werden verarbeitet"]
+        ev = Evaluator(gold, overlap_threshold=0.3, semantic_threshold=0.75)
+        retrieved = ["health data is being processed"]
+        result = ev.evaluate("test", "query", retrieved, semantic_matrix=None)
+        assert result.found == 0
+        assert result.miss_details[0].match_type == "none"

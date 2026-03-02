@@ -234,6 +234,7 @@ def init_state():
         "index_timestamp": None,
         "eval_results": None,
         "search_results": None,
+        "search_translated_query": None,
     }
     for key, val in defaults.items():
         if key not in st.session_state:
@@ -347,29 +348,37 @@ async def build_index(force: bool = False) -> tuple[int, list[str]]:
 
 
 async def run_evaluation(
-    queries: dict[str, str], limit: int = 20, overlap_threshold: float = 0.3
+    queries: dict[str, str],
+    limit: int = 20,
+    overlap_threshold: float = 0.3,
+    semantic_threshold: float = 0.75,
 ):
     """Run evaluation against gold standard with configurable overlap."""
-    evaluator = Evaluator.from_json(GOLD_STANDARD_PATH, overlap_threshold=overlap_threshold)
-    
+    evaluator = Evaluator.from_json(
+        GOLD_STANDARD_PATH,
+        overlap_threshold=overlap_threshold,
+        semantic_threshold=semantic_threshold,
+    )
+
     async with HDJRag(DB_PATH) as rag:
         results = []
         for name, query in queries.items():
             result = await evaluator.run_query(rag, name, query, limit)
             results.append(result)
-        
+
         save_results(results, RESULTS_DIR)
         return results
 
 
-async def search_documents(query: str, limit: int = 10):
+async def search_documents(query: str, limit: int = 10, cross_lingual: bool = True):
     async with HDJRag(DB_PATH) as rag:
-        return await rag.search(query, limit=limit)
+        return await rag.search(query, limit=limit, cross_lingual=cross_lingual)
 
 
 _MATCH_TYPE_LABELS = {
     "substring": "exact text match",
     "word_overlap": "shared keywords",
+    "semantic": "cross-lingual semantic match",
 }
 
 # ============ UI Helpers ============
@@ -768,7 +777,7 @@ with tab3:
     # ===== RUN EVALUATION =====
     st.subheader("Run Evaluation")
     
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3, col4, col5 = st.columns(5)
     with col1:
         st.metric("Queries", len(queries))
     with col2:
@@ -796,6 +805,21 @@ with tab3:
                 "0.7+ = very strict"
             ),
         )
+    with col5:
+        semantic_threshold = st.slider(
+            "Semantic match threshold",
+            min_value=0.5,
+            max_value=0.95,
+            value=0.75,
+            step=0.05,
+            help=(
+                "Minimum cosine similarity for a cross-lingual semantic match.\n\n"
+                "When word-overlap fails but embedding similarity exceeds this "
+                "threshold, the gold passage counts as found via semantic match.\n\n"
+                "0.75 = balanced (default)\n"
+                "0.85+ = stricter"
+            ),
+        )
     
     can_run = len(queries) > 0 and len(gold) > 0
     
@@ -810,7 +834,12 @@ with tab3:
         st.session_state.eval_results = None
         with st.spinner("Running evaluation..."):
             results = asyncio.run(
-                run_evaluation(queries, limit, overlap_threshold=overlap_threshold)
+                run_evaluation(
+                    queries,
+                    limit,
+                    overlap_threshold=overlap_threshold,
+                    semantic_threshold=semantic_threshold,
+                )
             )
             st.session_state.eval_results = results
             best = max(results, key=lambda r: r.recall)
@@ -819,6 +848,7 @@ with tab3:
                 "gold_sections_count": len(gold),
                 "results_limit": limit,
                 "overlap_threshold": overlap_threshold,
+                "semantic_threshold": semantic_threshold,
                 "best_query": best.name,
                 "best_recall": round(best.recall, 3),
             })
@@ -959,6 +989,7 @@ with tab3:
             "search_method": "Hybrid (vector + full-text with RRF reranking)",
             "results_limit": limit,
             "overlap_threshold": overlap_threshold,
+            "semantic_threshold": semantic_threshold,
             "indexed_pdfs": list(index_meta.get("pdfs", [])),
         }
         report_md = generate_report(
@@ -993,24 +1024,42 @@ with tab4:
         placeholder="Describe what you want to find...",
         height=100
     )
-    
-    col1, col2 = st.columns([3, 1])
+
+    col1, col2, col3 = st.columns([2, 1, 1])
     with col2:
         limit = st.number_input("Max results", min_value=5, max_value=2000, value=10, key="search_limit", help="Up to 2000 results. Your M1 Max can handle this easily. More results = more comprehensive but slower to scroll through.")
-    
+    with col3:
+        cross_lingual = st.checkbox(
+            "Cross-lingual",
+            value=True,
+            help="Also search with the query translated to the other language (DE↔EN). Uses offline translation.",
+        )
+
     if st.button("🔍 Search", disabled=not query):
+        translated_query = None
+        if cross_lingual:
+            try:
+                from src.hdj.translate import translate_query as _tq
+                _, translated_query = _tq(query)
+            except Exception:
+                pass
         with st.spinner("Searching..."):
-            results = asyncio.run(search_documents(query, limit))
+            results = asyncio.run(search_documents(query, limit, cross_lingual=cross_lingual))
             st.session_state.search_results = results
+            st.session_state.search_translated_query = translated_query
             log_event(AUDIT_PATH, "search_performed", {
                 "query_preview": query[:100],
                 "results_count": len(results),
                 "limit": limit,
+                "cross_lingual": cross_lingual,
             })
         st.rerun()
     
     if st.session_state.search_results:
         st.divider()
+        translated_q = st.session_state.get("search_translated_query")
+        if translated_q:
+            st.caption(f"Also searched with translation: _{translated_q}_")
         results = st.session_state.search_results
         st.markdown(f"**Found {len(results)} sections:**")
 

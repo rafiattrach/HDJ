@@ -77,17 +77,63 @@ class HDJRag:
 
         return len(pdf_files)
 
-    async def search(self, query: str, limit: int = 20) -> list[dict]:
-        """Search and return results as dicts."""
+    async def _raw_search(self, query: str, limit: int = 20) -> list[dict]:
+        """Run a single search and return results as dicts (including chunk_id)."""
         results = await self.client.search(query, limit=limit)
         return [
             {
+                "chunk_id": r.chunk_id,
                 "content": r.content,
                 "score": r.score,
                 "document_uri": r.document_uri,
                 "page_numbers": r.page_numbers,
             }
             for r in results
+        ]
+
+    async def search(
+        self, query: str, limit: int = 20, cross_lingual: bool = True
+    ) -> list[dict]:
+        """Search and return results as dicts.
+
+        When *cross_lingual* is ``True`` (default), the query is translated
+        to the other language (DE↔EN) and both variants are searched.
+        Results are merged by ``chunk_id`` (max score wins) and the top
+        *limit* are returned.
+        """
+        if not cross_lingual:
+            return await self._raw_search(query, limit=limit)
+
+        # Lazy import to avoid loading translation models at module import
+        from .translate import translate_query
+
+        original, translated = translate_query(query)
+
+        results_orig = await self._raw_search(original, limit=limit)
+
+        if translated is None:
+            return [
+                {k: v for k, v in r.items() if k != "chunk_id"}
+                for r in results_orig
+            ]
+
+        results_trans = await self._raw_search(translated, limit=limit)
+
+        # Merge by chunk_id — max score wins per chunk
+        merged: dict[str | None, dict] = {}
+        for r in results_orig + results_trans:
+            cid = r.get("chunk_id")
+            if cid is None:
+                # No chunk_id — just keep it (shouldn't happen in practice)
+                merged[id(r)] = r
+            elif cid not in merged or r["score"] > merged[cid]["score"]:
+                merged[cid] = r
+
+        sorted_results = sorted(merged.values(), key=lambda r: r["score"], reverse=True)
+
+        return [
+            {k: v for k, v in r.items() if k != "chunk_id"}
+            for r in sorted_results[:limit]
         ]
 
     async def embed_texts(self, texts: list[str]) -> list[list[float]]:

@@ -51,6 +51,8 @@ def generate_report(
     results_limit = config.get("results_limit", 20)
     overlap_threshold = config.get("overlap_threshold", 0.3)
     threshold_pct = int(overlap_threshold * 100)
+    semantic_threshold = config.get("semantic_threshold", 0.75)
+    semantic_pct = int(semantic_threshold * 100)
 
     # Header
     lines.append("# HDJ RAG Evaluation Report")
@@ -64,6 +66,7 @@ def generate_report(
     lines.append(f"- Search: {search_method}")
     lines.append(f"- Results per query: {results_limit}")
     lines.append(f"- Gold match strictness: {overlap_threshold} ({threshold_pct}% word overlap)")
+    lines.append(f"- Semantic match threshold: {semantic_threshold} ({semantic_pct}% cosine similarity)")
     lines.append("")
 
     # Decision Provenance
@@ -77,6 +80,7 @@ def generate_report(
     lines.append(f"4. **Matching**: Each gold passage is compared to every retrieved chunk using word-level Jaccard overlap (stopwords filtered)")
     lines.append(f"5. **Threshold**: A gold passage counts as \"found\" if ≥{threshold_pct}% of its *content words* appear in a retrieved chunk (or it is a substring match)")
     lines.append(f"6. **Semantic similarity**: Cosine similarity between gold passage and chunk embeddings is reported alongside word overlap")
+    lines.append(f"7. **Semantic match fallback**: When word overlap fails but cosine similarity ≥{semantic_pct}%, the passage is counted as a cross-lingual semantic match (enables DE↔EN evaluation)")
     lines.append("")
     lines.append("**Interpreting scores:**")
     lines.append("- **Recall** = proportion of gold-standard passages that were found among retrieved chunks")

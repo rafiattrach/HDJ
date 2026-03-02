@@ -10,6 +10,7 @@ requires-python = ">=3.12"
 dependencies = [
     "haiku.rag>=0.25.0",
     "streamlit>=1.40.0",
+    "argostranslate>=1.9.0",
 ]
 
 [tool.setuptools.packages.find]

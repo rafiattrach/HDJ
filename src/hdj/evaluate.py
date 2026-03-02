@@ -35,6 +35,70 @@ STOPWORDS: frozenset[str] = frozenset({
     "yourself", "yourselves",
 })
 
+# Common German stopwords — filtered alongside English stopwords so that
+# cross-lingual comparisons aren't inflated by function words in either
+# language.
+GERMAN_STOPWORDS: frozenset[str] = frozenset({
+    "ab", "aber", "ach", "alle", "allein", "allem", "allen", "aller",
+    "allerdings", "alles", "also", "am", "an", "ander", "andere", "anderem",
+    "anderen", "anderer", "anderes", "anderm", "andern", "anders", "auch",
+    "auf", "aus", "ausser", "außer", "ausserdem", "außerdem",
+    "bei", "beide", "beiden", "beider", "beiderlei", "beides", "beim",
+    "bereits", "bestimmte", "bestimmten", "bestimmter", "bin", "bis",
+    "bisher", "bist",
+    "da", "dabei", "dadurch", "dafür", "dagegen", "daher", "dahin",
+    "damals", "damit", "danach", "daneben", "dann", "daran", "darauf",
+    "daraus", "darf", "darfst", "darin", "darum", "darunter", "darüber",
+    "das", "dass", "daß", "davon", "davor", "dazu", "dein", "deine",
+    "deinem", "deinen", "deiner", "deines", "dem", "den", "denn", "dennoch",
+    "der", "deren", "des", "deshalb", "dessen", "dich", "die", "dies",
+    "diese", "dieselbe", "dieselben", "diesem", "diesen", "dieser", "dieses",
+    "dir", "doch", "dort", "drei", "drin", "dritte", "dritten", "dritter",
+    "du", "dumm", "durch", "dürfen",
+    "eben", "ebenso", "ehe", "eher", "ein", "eine", "einem", "einen",
+    "einer", "einige", "einigem", "einigen", "einiger", "einiges", "einmal",
+    "er", "erst", "es", "etwa", "etwas", "euch", "euer", "eure", "eurem",
+    "euren", "eurer", "eures",
+    "für",
+    "ganz", "gar", "gegen", "gehen", "geht", "genug", "gerade", "gering",
+    "gern", "gerne", "gewesen", "gewiß", "gewiss",
+    "hab", "habe", "haben", "habt", "hat", "hatte", "hätte", "hin",
+    "hinter",
+    "ich", "ihm", "ihn", "ihnen", "ihr", "ihre", "ihrem", "ihren", "ihrer",
+    "ihres", "immer", "in", "indem", "infolge", "innen", "ins",
+    "irgend", "ist",
+    "ja", "jede", "jedem", "jeden", "jeder", "jedes", "jedoch", "jemals",
+    "jene", "jenem", "jenen", "jener", "jenes", "jetzt",
+    "kann", "kannst", "kaum", "kein", "keine", "keinem", "keinen", "keiner",
+    "keines", "können", "könnte",
+    "lang", "lange", "längst",
+    "machen", "macht", "man", "manch", "manche", "manchem", "manchen",
+    "mancher", "mancherlei", "manches", "mehr", "mein", "meine", "meinem",
+    "meinen", "meiner", "meines", "mich", "mir", "mit", "mochte", "möchte",
+    "morgen", "morgens", "muss", "muß", "müssen", "musste", "müsste",
+    "nach", "nachdem", "nachher", "nächst", "neben", "nein", "nicht",
+    "nichts", "nie", "niemand", "nirgends", "noch", "nun", "nur",
+    "ob", "oben", "oder", "ohne",
+    "sehr", "seid", "sein", "seine", "seinem", "seinen", "seiner", "seines",
+    "seit", "seitdem", "sich", "sicher", "sie", "sind", "so", "sofort",
+    "sogar", "solch", "solche", "solchem", "solchen", "solcher", "soll",
+    "sollen", "sollte", "sollten", "solltest", "sondern", "sonst", "soviel",
+    "sowie", "über", "überall", "überein",
+    "um", "ums", "und", "uns", "unser", "unsere", "unserem", "unseren",
+    "unserer", "unseres", "unter",
+    "viel", "viele", "vielem", "vielen", "vielleicht", "vom", "von", "vor",
+    "vorbei", "vorher",
+    "während", "wann", "war", "warum", "was", "weder", "weil", "weit",
+    "welch", "welche", "welchem", "welchen", "welcher", "welches", "wem",
+    "wen", "wenig", "wenige", "wenigen", "weniger", "wenigstens", "wenn",
+    "wer", "werde", "werden", "wessen", "wie", "wieder", "will", "wir",
+    "wird", "wirklich", "wo", "wohl", "wollen", "worden", "wurde", "würde",
+    "würden",
+    "zu", "zum", "zur", "zusammen", "zwar", "zwischen",
+})
+
+ALL_STOPWORDS: frozenset[str] = STOPWORDS | GERMAN_STOPWORDS
+
 
 @dataclass
 class RetrievedChunk:
@@ -57,7 +121,7 @@ class OverlapDetail:
     matched_chunk: RetrievedChunk | None = None
     overlap_ratio: float = 0.0
     overlapping_words: list[str] = field(default_factory=list)
-    match_type: str = "none"  # "substring" | "word_overlap" | "none"
+    match_type: str = "none"  # "substring" | "word_overlap" | "semantic" | "none"
     semantic_similarity: float = 0.0  # cosine similarity between embeddings
 
     def to_dict(self) -> dict:
@@ -104,18 +168,29 @@ class QueryResult:
 class Evaluator:
     """Evaluates RAG retrieval against gold standard."""
 
-    def __init__(self, gold_standard: list[str], overlap_threshold: float = 0.3):
+    def __init__(
+        self,
+        gold_standard: list[str],
+        overlap_threshold: float = 0.3,
+        semantic_threshold: float = 0.75,
+    ):
         self.gold_standard = gold_standard
         self.overlap_threshold = overlap_threshold
+        self.semantic_threshold = semantic_threshold
         self._gold_embeddings: list[list[float]] | None = None
 
     @classmethod
-    def from_json(cls, path: Path, overlap_threshold: float = 0.3) -> "Evaluator":
+    def from_json(
+        cls,
+        path: Path,
+        overlap_threshold: float = 0.3,
+        semantic_threshold: float = 0.75,
+    ) -> "Evaluator":
         """Load gold standard from JSON file."""
         with open(path) as f:
             data = json.load(f)
         texts = [item["text"] for item in data]
-        return cls(texts, overlap_threshold)
+        return cls(texts, overlap_threshold, semantic_threshold=semantic_threshold)
 
     @staticmethod
     def _tokenize(text: str) -> set[str]:
@@ -124,8 +199,12 @@ class Evaluator:
 
     @staticmethod
     def _content_words(text: str) -> set[str]:
-        """Extract lowercase content words (no stopwords, no punctuation)."""
-        return set(re.findall(r"\w+", text.lower())) - STOPWORDS
+        """Extract lowercase content words (no stopwords, no punctuation).
+
+        Filters both English and German stopwords so that cross-lingual
+        comparisons are driven by meaningful content words.
+        """
+        return set(re.findall(r"\w+", text.lower())) - ALL_STOPWORDS
 
     def _text_overlap(
         self, retrieved: str, gold: str
@@ -212,8 +291,25 @@ class Evaluator:
 
             # Look up semantic similarity if available
             sem_sim = 0.0
+            sem_best_chunk_idx = best_chunk_idx
             if semantic_matrix is not None and len(chunks) > 0:
-                sem_sim = float(semantic_matrix[gold_idx, best_chunk_idx])
+                sem_best_chunk_idx = int(np.argmax(semantic_matrix[gold_idx]))
+                sem_sim = float(semantic_matrix[gold_idx, sem_best_chunk_idx])
+
+            # Semantic fallback: if word-overlap missed but semantic similarity
+            # is high enough, upgrade to a "semantic" match.  This is the key
+            # enabler for cross-lingual evaluation — a German gold passage and
+            # its English equivalent share zero content words but have high
+            # cosine similarity via multilingual embeddings.
+            if (
+                not is_found
+                and sem_sim >= self.semantic_threshold
+                and semantic_matrix is not None
+            ):
+                best_type = "semantic"
+                best_chunk = chunks[sem_best_chunk_idx]
+                best_chunk_idx = sem_best_chunk_idx
+                is_found = True
 
             detail = OverlapDetail(
                 gold_text=gold,

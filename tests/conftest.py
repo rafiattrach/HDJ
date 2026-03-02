@@ -17,7 +17,7 @@ def simple_gold():
 
 @pytest.fixture
 def evaluator(simple_gold):
-    return Evaluator(simple_gold, overlap_threshold=0.3)
+    return Evaluator(simple_gold, overlap_threshold=0.3, semantic_threshold=0.75)
 
 
 @pytest.fixture
