@@ -5,6 +5,16 @@ from .evaluate import Evaluator, QueryResult, RetrievedChunk, OverlapDetail
 from .audit import log_event, load_events
 from .export import generate_report
 from .translate import detect_language, translate_query, ensure_packages
+from .history import (
+    RunSummary,
+    RunDiff,
+    GoldSectionTracker,
+    load_run,
+    load_all_runs,
+    diff_runs,
+    aggregate_query_performance,
+    format_timestamp,
+)
 
 __all__ = [
     "HDJRag",
@@ -18,4 +28,12 @@ __all__ = [
     "detect_language",
     "translate_query",
     "ensure_packages",
+    "RunSummary",
+    "RunDiff",
+    "GoldSectionTracker",
+    "load_run",
+    "load_all_runs",
+    "diff_runs",
+    "aggregate_query_performance",
+    "format_timestamp",
 ]

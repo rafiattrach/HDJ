@@ -20,6 +20,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.hdj import HDJRag, Evaluator, log_event, load_events, generate_report
 from src.hdj.audit import clear_events
 from src.hdj.evaluate import save_results
+from src.hdj.history import load_all_runs, diff_runs, aggregate_query_performance, format_timestamp
 
 # Paths
 ROOT = Path(__file__).parent.parent
@@ -486,13 +487,14 @@ with col2:
 st.divider()
 
 # ===== TABS =====
-tab1, tab2, tab3, tab_findings, tab4, tab5 = st.tabs([
+tab1, tab2, tab3, tab_findings, tab4, tab5, tab6 = st.tabs([
     "1. Documents",
     "2. Prepare Documents",
     "3. Search",
     "📌 My Findings",
     "4. Validate Search",
     "5. Activity Log",
+    "6. History",
 ])
 
 
@@ -1388,6 +1390,156 @@ with tab5:
         st.info("No activity recorded yet. Actions will appear here as you use the tool.")
 
 
+# ============ TAB 6: History ============
+with tab6:
+    import pandas as pd
+
+    runs = load_all_runs(RESULTS_DIR)
+
+    if not runs:
+        st.info("No evaluation runs found. Run a validation first to see history.")
+    else:
+        # --- Sub-section 1: Coverage Over Time ---
+        st.subheader("Coverage Over Time")
+
+        # Build DataFrame for line chart: rows=runs, cols=query names
+        all_query_names: list[str] = []
+        for run in runs:
+            for qn in run.query_names:
+                if qn not in all_query_names:
+                    all_query_names.append(qn)
+
+        chart_data: dict[str, list[float | None]] = {qn: [] for qn in all_query_names}
+        chart_index: list[str] = []
+
+        for run in runs:
+            chart_index.append(format_timestamp(run.timestamp))
+            for qn in all_query_names:
+                chart_data[qn].append(run.recalls.get(qn))
+
+        df = pd.DataFrame(chart_data, index=chart_index)
+        st.line_chart(df)
+
+        # Summary: best coverage per run
+        st.markdown("**Run summaries:**")
+        for run in runs:
+            best_r = max(run.recalls.values()) if run.recalls else 0.0
+            color = "green" if best_r >= 0.7 else ("orange" if best_r >= 0.4 else "red")
+            st.markdown(
+                f"- **{format_timestamp(run.timestamp)}** — "
+                f"best coverage: :{color}[{best_r:.1%}] "
+                f"({run.best_query})"
+            )
+
+        st.divider()
+
+        # --- Sub-section 2: Compare Two Runs ---
+        st.subheader("Compare Two Runs")
+
+        ts_labels = {
+            run.timestamp: format_timestamp(run.timestamp) for run in runs
+        }
+        ts_list = [run.timestamp for run in runs]
+
+        col_a, col_b = st.columns(2)
+        with col_a:
+            baseline_ts = st.selectbox(
+                "Baseline",
+                ts_list,
+                index=0,
+                format_func=lambda t: ts_labels[t],
+            )
+        with col_b:
+            compare_ts = st.selectbox(
+                "Compare",
+                ts_list,
+                index=len(ts_list) - 1,
+                format_func=lambda t: ts_labels[t],
+            )
+
+        if baseline_ts == compare_ts:
+            st.warning("Select two different runs to compare.")
+        else:
+            diff = diff_runs(RESULTS_DIR, baseline_ts, compare_ts)
+
+            if diff.total_gold_changed != 0:
+                direction = "more" if diff.total_gold_changed > 0 else "fewer"
+                st.info(
+                    f"Reference passage count changed: "
+                    f"{abs(diff.total_gold_changed)} {direction} passages"
+                )
+
+            if diff.queries_added:
+                st.markdown(f"**Queries added:** {', '.join(diff.queries_added)}")
+            if diff.queries_removed:
+                st.markdown(f"**Queries removed:** {', '.join(diff.queries_removed)}")
+
+            st.markdown("**Coverage change per query:**")
+            for q, delta in sorted(diff.recall_changes.items()):
+                if delta > 0:
+                    st.markdown(f"- **{q}**: :green[+{delta:.1%}]")
+                elif delta < 0:
+                    st.markdown(f"- **{q}**: :red[{delta:.1%}]")
+                else:
+                    st.markdown(f"- **{q}**: no change")
+
+            # Expandable gained/lost per query
+            for q in sorted(diff.recall_changes.keys()):
+                g = diff.gained.get(q, [])
+                l = diff.lost.get(q, [])
+                if g or l:
+                    with st.expander(f"Details: {q} (+{len(g)} / -{len(l)})"):
+                        if g:
+                            st.markdown("**Gained:**")
+                            for txt in g:
+                                st.markdown(f"- :green[{txt[:120]}]")
+                        if l:
+                            st.markdown("**Lost:**")
+                            for txt in l:
+                                st.markdown(f"- :red[{txt[:120]}]")
+
+        st.divider()
+
+        # --- Sub-section 3: Reference Passage Reachability ---
+        st.subheader("Reference Passage Reachability")
+
+        trackers = aggregate_query_performance(RESULTS_DIR, runs=runs)
+
+        if trackers:
+            never_found = sum(1 for t in trackers if not t.ever_found)
+            always_found = sum(1 for t in trackers if t.find_rate == 1.0)
+
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Total tracked", len(trackers))
+            m2.metric("Never found", never_found)
+            m3.metric("Always found", always_found)
+
+            # Bar chart of find rates
+            bar_df = pd.DataFrame({
+                "Find rate": [t.find_rate for t in trackers],
+            }, index=[t.preview[:60] + "..." if len(t.preview) > 60 else t.preview for t in trackers])
+            st.bar_chart(bar_df)
+
+            # Expandable details per passage (hardest first)
+            st.markdown("**Passage details** (hardest to find first):")
+            for t in trackers:
+                label = t.preview[:80] + "..." if len(t.preview) > 80 else t.preview
+                rate_color = "green" if t.find_rate >= 0.7 else ("orange" if t.find_rate >= 0.3 else "red")
+                with st.expander(f":{rate_color}[{t.find_rate:.0%}] {label}"):
+                    if t.found_by:
+                        st.markdown("**Found by:**")
+                        for q, timestamps in sorted(t.found_by.items()):
+                            ts_str = ", ".join(format_timestamp(ts) for ts in timestamps)
+                            st.markdown(f"- {q}: {ts_str}")
+                    if t.missed_by:
+                        st.markdown("**Missed by:**")
+                        for q, timestamps in sorted(t.missed_by.items()):
+                            ts_str = ", ".join(format_timestamp(ts) for ts in timestamps)
+                            st.markdown(f"- {q}: {ts_str}")
+        else:
+            st.info("No passage data to track. Run some evaluations first.")
+
+
 # Footer
 st.divider()
-st.caption("Corpus Search Tool · Documents → Prepare → Search → Validate")
+st.caption("Corpus Search Tool · Documents → Prepare → Search → Validate → History")
