@@ -217,6 +217,7 @@ st.markdown("""
         font-size: 0.75rem;
         font-weight: 600;
     }
+    .score-badge[title], .rank-badge[title] { cursor: help; }
     .chunk-meta {
         font-size: 0.75rem;
         color: #9ca3af !important;
@@ -365,6 +366,11 @@ async def search_documents(query: str, limit: int = 10):
     async with HDJRag(DB_PATH) as rag:
         return await rag.search(query, limit=limit)
 
+
+_MATCH_TYPE_LABELS = {
+    "substring": "exact text match",
+    "word_overlap": "shared keywords",
+}
 
 # ============ UI Helpers ============
 
@@ -833,12 +839,18 @@ with tab3:
             with cols[0]:
                 st.markdown(f"{emoji} **{r.name}**")
             with cols[1]:
-                st.markdown(f"Recall: **{r.recall:.0%}**")
+                st.markdown(f'<span title="What percentage of gold standard sections were found by this query">Recall: <strong>{r.recall:.0%}</strong></span>', unsafe_allow_html=True)
             with cols[2]:
-                st.markdown(f"Precision: {r.precision:.0%}")
+                st.markdown(f'<span title="What percentage of retrieved results were actually relevant">Precision: {r.precision:.0%}</span>', unsafe_allow_html=True)
             with cols[3]:
-                st.markdown(f"Found {r.found}/{r.total_gold}")
+                st.markdown(f'<span title="How many gold standard sections were matched out of the total">Found {r.found}/{r.total_gold} gold sections</span>', unsafe_allow_html=True)
         
+        st.caption(
+            "Recall = % of gold standard found | "
+            "Precision = % of results that were relevant | "
+            "Hover any value for details"
+        )
+
         st.divider()
         best = sorted_results[0]
         show_success(f"Best: '{best.name}' with {best.recall:.0%} recall")
@@ -859,8 +871,8 @@ with tab3:
                             if len(chunk.content) > 120:
                                 preview += "..."
                             st.markdown(
-                                f'<span class="rank-badge">#{chunk.rank}</span> '
-                                f'<span class="score-badge">{chunk.score:.1%}</span> '
+                                f'<span class="rank-badge" title="Position in search results">#{chunk.rank}</span> '
+                                f'<span class="score-badge" title="Similarity score: how closely this chunk matches your query (0–100%)">Similarity {chunk.score:.1%}</span> '
                                 f'{html_mod.escape(doc)} · Pages {pages}<br>'
                                 f'<span class="chunk-meta">{html_mod.escape(preview)}</span>',
                                 unsafe_allow_html=True,
@@ -872,7 +884,8 @@ with tab3:
                     st.markdown(f"**Matched sections ({len(r.match_details)}):**")
                     for i, detail in enumerate(r.match_details):
                         sem_label = f" · {detail.semantic_similarity:.0%} semantic" if detail.semantic_similarity > 0 else ""
-                        with st.expander(f"Match {i+1} — {detail.match_type} · {detail.overlap_ratio:.0%} overlap{sem_label}", expanded=False):
+                        match_label = _MATCH_TYPE_LABELS.get(detail.match_type, detail.match_type)
+                        with st.expander(f"Match {i+1} — {match_label} · {detail.overlap_ratio:.0%} word overlap{sem_label}", expanded=False):
                             col_g, col_c = st.columns(2)
                             with col_g:
                                 st.markdown("**Gold passage:**")
@@ -883,8 +896,8 @@ with tab3:
                                     chunk = detail.matched_chunk
                                     st.markdown("**Best matching chunk:**")
                                     badges = (
-                                        f'<span class="rank-badge">#{chunk.rank}</span> '
-                                        f'<span class="score-badge">{chunk.score:.1%}</span>'
+                                        f'<span class="rank-badge" title="Position in search results">#{chunk.rank}</span> '
+                                        f'<span class="score-badge" title="Similarity score: how closely this chunk matches your query (0–100%)">Similarity {chunk.score:.1%}</span>'
                                     )
                                     if detail.semantic_similarity > 0:
                                         badges += f' <span class="semantic-badge">{detail.semantic_similarity:.0%} semantic</span>'
@@ -900,7 +913,7 @@ with tab3:
                     st.markdown(f"**Missed sections ({len(r.miss_details)}):**")
                     for i, detail in enumerate(r.miss_details):
                         sem_label = f" · {detail.semantic_similarity:.0%} semantic" if detail.semantic_similarity > 0 else ""
-                        with st.expander(f"Missed {i+1} — {detail.overlap_ratio:.0%} overlap{sem_label} with nearest chunk", expanded=True):
+                        with st.expander(f"Missed {i+1} — only {detail.overlap_ratio:.0%} word overlap{sem_label} with nearest chunk", expanded=True):
                             st.markdown(
                                 f'<div class="overlap-miss">{html_mod.escape(detail.gold_text_preview)}</div>',
                                 unsafe_allow_html=True,
@@ -909,8 +922,8 @@ with tab3:
                                 chunk = detail.matched_chunk
                                 doc = _pretty_doc_name(chunk.document_uri)
                                 badges = (
-                                    f'<span class="rank-badge">#{chunk.rank}</span> '
-                                    f'<span class="score-badge">{chunk.score:.1%}</span>'
+                                    f'<span class="rank-badge" title="Position in search results">#{chunk.rank}</span> '
+                                    f'<span class="score-badge" title="Similarity score: how closely this chunk matches your query (0–100%)">Similarity {chunk.score:.1%}</span>'
                                 )
                                 if detail.semantic_similarity > 0:
                                     badges += f' <span class="semantic-badge">{detail.semantic_similarity:.0%} semantic</span>'
@@ -921,8 +934,8 @@ with tab3:
                                 )
                                 st.markdown(
                                     f"**{detail.overlap_ratio:.0%}** word overlap "
-                                    f"({len(detail.overlapping_words)} content words) — "
-                                    f"below {int(overlap_threshold * 100)}% threshold"
+                                    f"({len(detail.overlapping_words)} shared words) — "
+                                    f"below the {int(overlap_threshold * 100)}% threshold needed to count as a match"
                                 )
                                 chunk_preview = chunk.content[:200].replace("\n", " ")
                                 if len(chunk.content) > 200:
@@ -1007,14 +1020,14 @@ with tab4:
             score = r.get("score", 0.0)
             doc = _pretty_doc_name(r.get("document_uri"))
 
-            label = f"Result {i+1} · {score:.1%} · {doc}"
+            label = f"Result {i+1} · Similarity: {score:.1%} · {doc}"
             if pages:
                 label += f" · Pages {', '.join(map(str, pages))}"
 
             with st.expander(label, expanded=i < 3):
                 st.markdown(
-                    f'<span class="rank-badge">#{i+1}</span> '
-                    f'<span class="score-badge">{score:.1%}</span>',
+                    f'<span class="rank-badge" title="Position in search results">#{i+1}</span> '
+                    f'<span class="score-badge" title="Similarity score: how closely this chunk matches your query (0–100%)">Similarity {score:.1%}</span>',
                     unsafe_allow_html=True,
                 )
                 st.text_area(
