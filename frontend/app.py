@@ -199,6 +199,15 @@ st.markdown("""
         font-size: 0.75rem;
         font-weight: 600;
     }
+    .semantic-badge {
+        display: inline-block;
+        background-color: #fef3c7;
+        color: #92400e !important;
+        padding: 2px 8px;
+        border-radius: 12px;
+        font-size: 0.75rem;
+        font-weight: 600;
+    }
     .rank-badge {
         display: inline-block;
         background-color: #ede9fe;
@@ -594,16 +603,22 @@ with tab3:
             **Embedding Model:** `Qwen3-Embedding-4B` (via Ollama)
             - Converts text into 2560-dimensional vectors
             - Multilingual, optimized for semantic similarity
-            
+
             **Chunking:** 512 tokens per chunk
             - PDFs are split into overlapping chunks
             - Each chunk is embedded separately
-            
+
             **Search:** Vector similarity (cosine)
             - Your query is embedded the same way
             - Finds chunks with most similar vectors
             - Score = how similar (0-100%)
-            
+
+            **Evaluation matching:**
+            - **Word overlap** — stopwords (the, and, of …) are filtered so
+              only content words drive the match ratio
+            - **Semantic similarity** — cosine similarity between gold passage
+              and chunk embeddings (same model as search)
+
             **Database:** LanceDB (local vector store)
             """)
     
@@ -856,7 +871,8 @@ with tab3:
                 if r.match_details:
                     st.markdown(f"**Matched sections ({len(r.match_details)}):**")
                     for i, detail in enumerate(r.match_details):
-                        with st.expander(f"Match {i+1} — {detail.match_type} · {detail.overlap_ratio:.0%} overlap", expanded=False):
+                        sem_label = f" · {detail.semantic_similarity:.0%} semantic" if detail.semantic_similarity > 0 else ""
+                        with st.expander(f"Match {i+1} — {detail.match_type} · {detail.overlap_ratio:.0%} overlap{sem_label}", expanded=False):
                             col_g, col_c = st.columns(2)
                             with col_g:
                                 st.markdown("**Gold passage:**")
@@ -866,11 +882,13 @@ with tab3:
                                 if detail.matched_chunk:
                                     chunk = detail.matched_chunk
                                     st.markdown("**Best matching chunk:**")
-                                    st.markdown(
+                                    badges = (
                                         f'<span class="rank-badge">#{chunk.rank}</span> '
-                                        f'<span class="score-badge">{chunk.score:.1%}</span>',
-                                        unsafe_allow_html=True,
+                                        f'<span class="score-badge">{chunk.score:.1%}</span>'
                                     )
+                                    if detail.semantic_similarity > 0:
+                                        badges += f' <span class="semantic-badge">{detail.semantic_similarity:.0%} semantic</span>'
+                                    st.markdown(badges, unsafe_allow_html=True)
                                     chunk_preview = chunk.content[:200].replace("\n", " ")
                                     if len(chunk.content) > 200:
                                         chunk_preview += "..."
@@ -881,7 +899,8 @@ with tab3:
                 if r.miss_details:
                     st.markdown(f"**Missed sections ({len(r.miss_details)}):**")
                     for i, detail in enumerate(r.miss_details):
-                        with st.expander(f"Missed {i+1} — {detail.overlap_ratio:.0%} overlap with nearest chunk", expanded=True):
+                        sem_label = f" · {detail.semantic_similarity:.0%} semantic" if detail.semantic_similarity > 0 else ""
+                        with st.expander(f"Missed {i+1} — {detail.overlap_ratio:.0%} overlap{sem_label} with nearest chunk", expanded=True):
                             st.markdown(
                                 f'<div class="overlap-miss">{html_mod.escape(detail.gold_text_preview)}</div>',
                                 unsafe_allow_html=True,
@@ -889,16 +908,20 @@ with tab3:
                             if detail.matched_chunk:
                                 chunk = detail.matched_chunk
                                 doc = _pretty_doc_name(chunk.document_uri)
-                                st.markdown(
-                                    f'**Nearest chunk:** '
+                                badges = (
                                     f'<span class="rank-badge">#{chunk.rank}</span> '
-                                    f'<span class="score-badge">{chunk.score:.1%}</span> '
+                                    f'<span class="score-badge">{chunk.score:.1%}</span>'
+                                )
+                                if detail.semantic_similarity > 0:
+                                    badges += f' <span class="semantic-badge">{detail.semantic_similarity:.0%} semantic</span>'
+                                st.markdown(
+                                    f'**Nearest chunk:** {badges} '
                                     f'· {html_mod.escape(doc)}',
                                     unsafe_allow_html=True,
                                 )
                                 st.markdown(
-                                    f"**{detail.overlap_ratio:.0%}** overlap "
-                                    f"({len(detail.overlapping_words)} words) — "
+                                    f"**{detail.overlap_ratio:.0%}** word overlap "
+                                    f"({len(detail.overlapping_words)} content words) — "
                                     f"below {int(overlap_threshold * 100)}% threshold"
                                 )
                                 chunk_preview = chunk.content[:200].replace("\n", " ")

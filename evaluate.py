@@ -48,9 +48,10 @@ def print_result(r: QueryResult) -> None:
             if detail.matched_chunk:
                 chunk = detail.matched_chunk
                 doc = _pretty_name(chunk.document_uri)
+                sem = f", {detail.semantic_similarity:.0%} semantic" if detail.semantic_similarity > 0 else ""
                 print(
                     f"       Nearest: #{chunk.rank} ({chunk.score:.1%}) from {doc} "
-                    f"— {detail.overlap_ratio:.0%} overlap ({len(detail.overlapping_words)} words)"
+                    f"— {detail.overlap_ratio:.0%} overlap ({len(detail.overlapping_words)} words){sem}"
                 )
         if len(r.miss_details) > 5:
             print(f"    ... and {len(r.miss_details) - 5} more")

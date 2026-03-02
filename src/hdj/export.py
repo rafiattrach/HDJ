@@ -74,8 +74,9 @@ def generate_report(
     lines.append(f"1. **Embedding**: Text is embedded with `{embedding_model}` into {chunk_size}-token chunks")
     lines.append("2. **Indexing**: Chunks are stored in a LanceDB vector database")
     lines.append(f"3. **Search**: {search_method}, returning top {results_limit} results per query")
-    lines.append(f"4. **Matching**: Each gold passage is compared to every retrieved chunk using word-level Jaccard overlap")
-    lines.append(f"5. **Threshold**: A gold passage counts as \"found\" if ≥{threshold_pct}% of its words appear in a retrieved chunk (or it is a substring match)")
+    lines.append(f"4. **Matching**: Each gold passage is compared to every retrieved chunk using word-level Jaccard overlap (stopwords filtered)")
+    lines.append(f"5. **Threshold**: A gold passage counts as \"found\" if ≥{threshold_pct}% of its *content words* appear in a retrieved chunk (or it is a substring match)")
+    lines.append(f"6. **Semantic similarity**: Cosine similarity between gold passage and chunk embeddings is reported alongside word overlap")
     lines.append("")
     lines.append("**Interpreting scores:**")
     lines.append("- **Recall** = proportion of gold-standard passages that were found among retrieved chunks")
@@ -170,9 +171,14 @@ def generate_report(
                         f"   - Nearest chunk: #{chunk.rank} (score {chunk.score:.1%}) from {doc}"
                     )
                     lines.append(
-                        f"   - {overlap_pct}% overlap ({len(detail.overlapping_words)} words) "
+                        f"   - {overlap_pct}% word overlap ({len(detail.overlapping_words)} content words) "
                         f"is {gap}% below the {threshold_pct}% threshold"
                     )
+                    sem = getattr(detail, "semantic_similarity", 0.0)
+                    if sem > 0:
+                        lines.append(
+                            f"   - Semantic similarity: {sem:.0%}"
+                        )
                 else:
                     lines.append("   - No retrieved chunks to compare")
             lines.append("")

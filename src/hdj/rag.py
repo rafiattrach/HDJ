@@ -1,5 +1,8 @@
 """RAG client wrapper for Health Data Justice."""
 
+import asyncio
+import json as _json
+import urllib.request
 from pathlib import Path
 
 from haiku.rag.client import HaikuRAG
@@ -10,6 +13,8 @@ from haiku.rag.config.models import (
     SearchConfig,
     ProcessingConfig,
 )
+
+OLLAMA_BASE_URL = "http://localhost:11434"
 
 
 def get_config() -> AppConfig:
@@ -84,6 +89,26 @@ class HDJRag:
             }
             for r in results
         ]
+
+    async def embed_texts(self, texts: list[str]) -> list[list[float]]:
+        """Get embeddings for a list of texts using the configured Ollama model.
+
+        Calls the Ollama ``/api/embed`` endpoint directly so we can embed
+        arbitrary strings (not just indexed documents).
+        """
+        model_name = self.config.embeddings.model.name
+
+        def _call_ollama() -> list[list[float]]:
+            payload = _json.dumps({"model": model_name, "input": texts}).encode()
+            req = urllib.request.Request(
+                f"{OLLAMA_BASE_URL}/api/embed",
+                data=payload,
+                headers={"Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                return _json.loads(resp.read())["embeddings"]
+
+        return await asyncio.to_thread(_call_ollama)
 
     async def list_documents(self) -> list[dict]:
         """List all indexed documents."""
