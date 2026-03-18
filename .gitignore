@@ -13,7 +13,6 @@ data/audit_trail.json
 data/collections.json
 data/gold_standard.json
 data/pdfs/
-data/defaults/pdfs/
 results/
 
 # Claude Code
