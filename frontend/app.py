@@ -1192,8 +1192,9 @@ with tab3:
             translated_query = None
             if cross_lingual:
                 try:
-                    from src.hdj.translate import translate_query as _tq
-                    _, translated_query = _tq(query)
+                    with st.spinner("Translating..."):
+                        from src.hdj.translate import translate_query as _tq
+                        _, translated_query = _tq(query)
                 except Exception:
                     pass
             with st.spinner("Searching..."):

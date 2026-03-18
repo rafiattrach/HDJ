@@ -79,8 +79,10 @@ def _get_translator(from_code: str, to_code: str):
 
 
 def _load_translators():
-    """Lazy-load both translation directions."""
+    """Lazy-load both translation directions, installing packages if needed."""
     global _de_en, _en_de
+    if _de_en is None or _en_de is None:
+        ensure_packages()
     if _de_en is None:
         _de_en = _get_translator("de", "en")
     if _en_de is None:
