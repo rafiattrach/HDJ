@@ -62,7 +62,7 @@ def format_timestamp(ts: str) -> str:
 
 def load_run(filepath: Path) -> RunSummary:
     """Load a single evaluation result file into a RunSummary."""
-    with open(filepath) as f:
+    with open(filepath, encoding="utf-8") as f:
         data = json.load(f)
 
     timestamp = data.get("timestamp", filepath.stem)
@@ -115,7 +115,7 @@ def load_all_runs(results_dir: Path) -> list[RunSummary]:
 
 def _load_result_details(filepath: Path) -> list[dict]:
     """Load the results array from an eval file."""
-    with open(filepath) as f:
+    with open(filepath, encoding="utf-8") as f:
         data = json.load(f)
     return data.get("results", [])
 

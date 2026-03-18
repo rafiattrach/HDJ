@@ -2,6 +2,13 @@
 
 RAG pipeline for finding relevant sections in health data governance documents.
 
+## Quick Start
+
+**Mac:** Double-click `run.sh` (or run `./run.sh` in Terminal)
+**Windows:** Double-click `run.bat`
+
+These scripts handle everything automatically: updates, Python, dependencies, Ollama, and launching the app.
+
 ## Setup
 
 ```bash

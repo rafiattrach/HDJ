@@ -3,7 +3,9 @@ Corpus Search Tool – find relevant passages across a document collection.
 """
 
 import asyncio
+import csv
 import html as html_mod
+import io
 import json
 import re
 import shutil
@@ -237,6 +239,7 @@ def init_state():
         "eval_results": None,
         "search_results": None,
         "search_translated_query": None,
+        "confirm_reset": False,
     }
     for key, val in defaults.items():
         if key not in st.session_state:
@@ -250,40 +253,43 @@ def get_pdf_list() -> list[Path]:
 
 def load_queries() -> dict[str, str]:
     if QUERIES_PATH.exists():
-        with open(QUERIES_PATH) as f:
+        with open(QUERIES_PATH, encoding="utf-8") as f:
             return json.load(f)
     if DEFAULT_QUERIES_PATH.exists():
-        with open(DEFAULT_QUERIES_PATH) as f:
+        with open(DEFAULT_QUERIES_PATH, encoding="utf-8") as f:
             return json.load(f)
     return {}
 
 
 def save_queries(queries: dict[str, str]):
-    with open(QUERIES_PATH, "w") as f:
+    with open(QUERIES_PATH, "w", encoding="utf-8") as f:
         json.dump(queries, f, indent=2)
 
 
 def load_gold_standard() -> list[dict]:
     if GOLD_STANDARD_PATH.exists():
-        with open(GOLD_STANDARD_PATH) as f:
+        with open(GOLD_STANDARD_PATH, encoding="utf-8") as f:
+            return json.load(f)
+    if DEFAULT_GOLD_STANDARD_PATH.exists():
+        with open(DEFAULT_GOLD_STANDARD_PATH, encoding="utf-8") as f:
             return json.load(f)
     return []
 
 
 def save_gold_standard(entries: list[dict]):
-    with open(GOLD_STANDARD_PATH, "w") as f:
+    with open(GOLD_STANDARD_PATH, "w", encoding="utf-8") as f:
         json.dump(entries, f, indent=2)
 
 
 def load_collections() -> dict:
     if COLLECTIONS_PATH.exists():
-        with open(COLLECTIONS_PATH) as f:
+        with open(COLLECTIONS_PATH, encoding="utf-8") as f:
             return json.load(f)
     return {"collections": {}}
 
 
 def save_collections(data: dict):
-    with open(COLLECTIONS_PATH, "w") as f:
+    with open(COLLECTIONS_PATH, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
 
 
@@ -294,14 +300,18 @@ def add_to_collection(collection_name: str, passage: dict):
             "created": datetime.now().isoformat(),
             "passages": [],
         }
-    data["collections"][collection_name]["passages"].append(passage)
+    # Skip if same content already saved in this collection
+    existing = data["collections"][collection_name]["passages"]
+    if any(p["content"] == passage["content"] for p in existing):
+        return
+    existing.append(passage)
     save_collections(data)
 
 
 def load_index_meta() -> dict:
     """Load index metadata (timestamp, PDFs)."""
     if INDEX_META_PATH.exists():
-        with open(INDEX_META_PATH) as f:
+        with open(INDEX_META_PATH, encoding="utf-8") as f:
             return json.load(f)
     return {}
 
@@ -312,15 +322,15 @@ def save_index_meta(pdfs: list[str]):
         "timestamp": datetime.now().isoformat(),
         "pdfs": pdfs
     }
-    with open(INDEX_META_PATH, "w") as f:
+    with open(INDEX_META_PATH, "w", encoding="utf-8") as f:
         json.dump(meta, f, indent=2)
     return meta
 
 
 def reset_to_defaults():
     """Reset everything to defaults."""
-    log_event(AUDIT_PATH, "reset_all")
     clear_events(AUDIT_PATH)
+    log_event(AUDIT_PATH, "reset_all")
 
     # Reset gold standard
     if DEFAULT_GOLD_STANDARD_PATH.exists():
@@ -522,16 +532,16 @@ _MATCH_TYPE_LABELS = {
 # ============ UI Helpers ============
 
 def show_info(text: str):
-    st.markdown(f'<div class="info-box">{text}</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="info-box">{html_mod.escape(text)}</div>', unsafe_allow_html=True)
 
 def show_def(title: str, text: str):
-    st.markdown(f'<div class="def-box"><strong>{title}:</strong> {text}</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="def-box"><strong>{html_mod.escape(title)}:</strong> {html_mod.escape(text)}</div>', unsafe_allow_html=True)
 
 def show_warn(text: str):
-    st.markdown(f'<div class="warn-box">⚠️ {text}</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="warn-box">⚠️ {html_mod.escape(text)}</div>', unsafe_allow_html=True)
 
 def show_success(text: str):
-    st.markdown(f'<div class="success-box">✓ {text}</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="success-box">✓ {html_mod.escape(text)}</div>', unsafe_allow_html=True)
 
 def _pretty_doc_name(document_uri: str | None) -> str:
     """Best-effort filename from a document URI/path."""
@@ -589,13 +599,27 @@ with col2:
     st.markdown("<br>", unsafe_allow_html=True)
     st.markdown('<div class="danger-btn">', unsafe_allow_html=True)
     if st.button("🚨 Reset All", help="Reset PDFs, index, gold standard, and queries to defaults"):
-        reset_to_defaults()
-        st.rerun()
+        st.session_state["confirm_reset"] = True
     st.markdown('</div>', unsafe_allow_html=True)
+
+if st.session_state.get("confirm_reset"):
+    st.warning("This will delete all your PDFs, collections, and settings. Are you sure?")
+    col_yes, col_no = st.columns(2)
+    with col_yes:
+        if st.button("Yes, reset everything"):
+            st.session_state["confirm_reset"] = False
+            reset_to_defaults()
+            st.rerun()
+    with col_no:
+        if st.button("Cancel"):
+            st.session_state["confirm_reset"] = False
+            st.rerun()
 
 st.divider()
 
 # ===== TABS =====
+# Note: tab3 = "Search" content, tab4 = "Validate Search" content
+# tab_findings sits between them in the UI
 tab1, tab2, tab3, tab_findings, tab4, tab5, tab6 = st.tabs([
     "1. Documents",
     "2. Prepare Documents",
@@ -676,7 +700,7 @@ with tab2:
         try:
             ts = datetime.fromisoformat(timestamp)
             timestamp_str = ts.strftime("%Y-%m-%d %H:%M:%S")
-        except:
+        except (ValueError, TypeError):
             timestamp_str = timestamp
         
         indexed_pdfs = index_meta.get("pdfs", [])
@@ -732,402 +756,401 @@ with tab4:
     index_meta = load_index_meta()
     if not index_meta.get("pdfs"):
         show_warn("Prepare your documents first (Step 2) before validating.")
-        st.stop()
+    else:
+        indexed_pdfs = index_meta.get("pdfs", [])
     
-    indexed_pdfs = index_meta.get("pdfs", [])
+        # ===== REFERENCE PASSAGES SECTION =====
+        st.subheader("Reference Passages")
     
-    # ===== REFERENCE PASSAGES SECTION =====
-    st.subheader("Reference Passages")
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        with st.expander("📖 What are reference passages?", expanded=False):
-            st.markdown("""
-            **Reference passages** are sections from your PDFs that you already
-            know are relevant to your research. You paste them here so the tool
-            can measure how well each research question finds them.
+        col1, col2 = st.columns(2)
+        with col1:
+            with st.expander("📖 What are reference passages?", expanded=False):
+                st.markdown("""
+                **Reference passages** are sections from your PDFs that you already
+                know are relevant to your research. You paste them here so the tool
+                can measure how well each research question finds them.
 
-            - **Coverage** = What % of your reference passages did the search find? (Higher = better)
-            - **Accuracy** = What % of returned results actually matched a reference passage? (Higher = less noise)
-            """)
-    with col2:
-        with st.expander("🔧 How does the search work?", expanded=False):
-            st.markdown("""
-            The tool reads each PDF and breaks it into short passages
-            (roughly half a page each). When you type a research question,
-            it finds the passages whose meaning is closest to your question
-            and ranks them by relevance (0–100%).
+                - **Coverage** = What % of your reference passages did the search find? (Higher = better)
+                - **Accuracy** = What % of returned results actually matched a reference passage? (Higher = less noise)
+                """)
+        with col2:
+            with st.expander("🔧 How does the search work?", expanded=False):
+                st.markdown("""
+                The tool reads each PDF and breaks it into short passages
+                (roughly half a page each). When you type a research question,
+                it finds the passages whose meaning is closest to your question
+                and ranks them by relevance (0–100%).
 
-            **Validation matching:**
-            - **Word match** — counts how many meaningful words are shared
-              between a reference passage and a retrieved passage (common
-              words like "the" and "of" are ignored)
-            - **Meaning similarity** — checks whether two passages express
-              the same idea, even if worded differently or in different
-              languages (German ↔ English)
-            """)
+                **Validation matching:**
+                - **Word match** — counts how many meaningful words are shared
+                  between a reference passage and a retrieved passage (common
+                  words like "the" and "of" are ignored)
+                - **Meaning similarity** — checks whether two passages express
+                  the same idea, even if worded differently or in different
+                  languages (German ↔ English)
+                """)
     
-    gold = load_gold_standard()
-    by_file = get_gold_standard_by_file(gold)
+        gold = load_gold_standard()
+        by_file = get_gold_standard_by_file(gold)
     
-    # Show gold standard sections (text only, no notes)
-    if gold:
-        st.markdown(f"**{len(gold)} reference passages** defined")
+        # Show gold standard sections (text only, no notes)
+        if gold:
+            st.markdown(f"**{len(gold)} reference passages** defined")
         
-        for filename, entries_with_idx in by_file.items():
-            # Check if this file is in the index
-            in_index = filename in indexed_pdfs
-            status = "" if in_index else " ⚠️ not in index"
+            for filename, entries_with_idx in by_file.items():
+                # Check if this file is in the index
+                in_index = filename in indexed_pdfs
+                status = "" if in_index else " ⚠️ not in index"
             
-            with st.expander(f"📄 {filename} ({len(entries_with_idx)} sections){status}", expanded=False):
-                if not in_index:
-                    show_warn(f"This PDF is not in the current index. Add it and rebuild.")
+                with st.expander(f"📄 {filename} ({len(entries_with_idx)} sections){status}", expanded=False):
+                    if not in_index:
+                        show_warn(f"This PDF is not in the current index. Add it and rebuild.")
                 
-                for idx, entry in entries_with_idx:
-                    st.markdown(f"**Section {idx+1}**")
+                    for idx, entry in entries_with_idx:
+                        st.markdown(f"**Section {idx+1}**")
                     
-                    new_text = st.text_area(
-                        "Text", value=entry["text"], height=100,
-                        key=f"gs_text_{idx}", label_visibility="collapsed"
+                        new_text = st.text_area(
+                            "Text", value=entry["text"], height=100,
+                            key=f"gs_text_{idx}", label_visibility="collapsed"
+                        )
+                    
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            if st.button("💾 Save", key=f"gs_save_{idx}"):
+                                gold[idx]["text"] = new_text
+                                save_gold_standard(gold)
+                                log_event(AUDIT_PATH, "gold_standard_edited", {
+                                    "source_file": entry.get("source_file", "unknown"),
+                                    "text_preview": new_text[:100],
+                                })
+                                st.success("Saved!")
+                                st.rerun()
+                        with col2:
+                            if st.button("🗑️ Delete", key=f"gs_del_{idx}"):
+                                log_event(AUDIT_PATH, "gold_standard_deleted", {
+                                    "source_file": entry.get("source_file", "unknown"),
+                                    "text_preview": entry.get("text", "")[:100],
+                                })
+                                del gold[idx]
+                                save_gold_standard(gold)
+                                st.rerun()
+                    
+                        st.divider()
+        else:
+            st.info("No reference passages defined yet. Add some below.")
+    
+        # Add new gold standard section - only for indexed PDFs
+        st.markdown("**Add a section:**")
+    
+        if indexed_pdfs:
+            new_file = st.selectbox("PDF (must be in index)", indexed_pdfs, key="gs_new_file")
+            new_text = st.text_area(
+                "Paste relevant text from this PDF",
+                placeholder="Copy and paste a section that's relevant to data justice...",
+                key="gs_new_text"
+            )
+        
+            if st.button("➕ Add Reference Passage"):
+                if new_text.strip():
+                    gold.append(
+                        {
+                            "source_file": new_file,
+                            "text": new_text.strip(),
+                        }
                     )
-                    
+                    save_gold_standard(gold)
+                    log_event(AUDIT_PATH, "gold_standard_added", {
+                        "source_file": new_file,
+                        "text_preview": new_text.strip()[:100],
+                    })
+                    st.success("Added!")
+                    st.rerun()
+                else:
+                    st.error("Please enter some text.")
+        else:
+            st.info("Prepare some PDFs first to add reference passages.")
+    
+        st.divider()
+    
+        # ===== RESEARCH QUESTIONS SECTION =====
+        st.subheader("Research Questions")
+    
+        queries = load_queries()
+    
+        if queries:
+            st.markdown(f"**{len(queries)} research questions** defined")
+        
+            for name, text in list(queries.items()):
+                with st.expander(f"📝 {name}", expanded=False):
+                    new_text = st.text_area(
+                        "Query", value=text, height=100,
+                        key=f"q_edit_{name}", label_visibility="collapsed"
+                    )
+                
                     col1, col2 = st.columns(2)
                     with col1:
-                        if st.button("💾 Save", key=f"gs_save_{idx}"):
-                            gold[idx]["text"] = new_text
-                            save_gold_standard(gold)
-                            log_event(AUDIT_PATH, "gold_standard_edited", {
-                                "source_file": entry.get("source_file", "unknown"),
+                        if st.button("💾 Save", key=f"q_save_{name}"):
+                            queries[name] = new_text
+                            save_queries(queries)
+                            log_event(AUDIT_PATH, "query_edited", {
+                                "name": name,
                                 "text_preview": new_text[:100],
                             })
                             st.success("Saved!")
                             st.rerun()
                     with col2:
-                        if st.button("🗑️ Delete", key=f"gs_del_{idx}"):
-                            log_event(AUDIT_PATH, "gold_standard_deleted", {
-                                "source_file": entry.get("source_file", "unknown"),
-                                "text_preview": entry.get("text", "")[:100],
-                            })
-                            del gold[idx]
-                            save_gold_standard(gold)
+                        if st.button("🗑️ Delete", key=f"q_del_{name}"):
+                            log_event(AUDIT_PATH, "query_deleted", {"name": name})
+                            del queries[name]
+                            save_queries(queries)
                             st.rerun()
-                    
-                    st.divider()
-    else:
-        st.info("No reference passages defined yet. Add some below.")
+        else:
+            st.info("No research questions defined. Add one below.")
     
-    # Add new gold standard section - only for indexed PDFs
-    st.markdown("**Add a section:**")
+        # Add new research question
+        st.markdown("**Add a question:**")
+        col1, col2 = st.columns([1, 3])
+        with col1:
+            new_q_name = st.text_input("Name", placeholder="my_query", key="new_q_name")
+        with col2:
+            new_q_text = st.text_area("Question text", placeholder="What to search for...", height=80, key="new_q_text")
     
-    if indexed_pdfs:
-        new_file = st.selectbox("PDF (must be in index)", indexed_pdfs, key="gs_new_file")
-        new_text = st.text_area(
-            "Paste relevant text from this PDF",
-            placeholder="Copy and paste a section that's relevant to data justice...",
-            key="gs_new_text"
-        )
-        
-        if st.button("➕ Add Reference Passage"):
-            if new_text.strip():
-                gold.append(
-                    {
-                        "source_file": new_file,
-                        "text": new_text.strip(),
-                    }
-                )
-                save_gold_standard(gold)
-                log_event(AUDIT_PATH, "gold_standard_added", {
-                    "source_file": new_file,
-                    "text_preview": new_text.strip()[:100],
-                })
-                st.success("Added!")
-                st.rerun()
-            else:
-                st.error("Please enter some text.")
-    else:
-        st.info("Prepare some PDFs first to add reference passages.")
+        if st.button("➕ Add Question") and new_q_name and new_q_text:
+            queries[new_q_name] = new_q_text
+            save_queries(queries)
+            log_event(AUDIT_PATH, "query_added", {
+                "name": new_q_name,
+                "text_preview": new_q_text[:100],
+            })
+            st.success(f"Added '{new_q_name}'")
+            st.rerun()
     
-    st.divider()
-    
-    # ===== RESEARCH QUESTIONS SECTION =====
-    st.subheader("Research Questions")
-    
-    queries = load_queries()
-    
-    if queries:
-        st.markdown(f"**{len(queries)} research questions** defined")
-        
-        for name, text in list(queries.items()):
-            with st.expander(f"📝 {name}", expanded=False):
-                new_text = st.text_area(
-                    "Query", value=text, height=100,
-                    key=f"q_edit_{name}", label_visibility="collapsed"
-                )
-                
-                col1, col2 = st.columns(2)
-                with col1:
-                    if st.button("💾 Save", key=f"q_save_{name}"):
-                        queries[name] = new_text
-                        save_queries(queries)
-                        log_event(AUDIT_PATH, "query_edited", {
-                            "name": name,
-                            "text_preview": new_text[:100],
-                        })
-                        st.success("Saved!")
-                        st.rerun()
-                with col2:
-                    if st.button("🗑️ Delete", key=f"q_del_{name}"):
-                        log_event(AUDIT_PATH, "query_deleted", {"name": name})
-                        del queries[name]
-                        save_queries(queries)
-                        st.rerun()
-    else:
-        st.info("No research questions defined. Add one below.")
-    
-    # Add new research question
-    st.markdown("**Add a question:**")
-    col1, col2 = st.columns([1, 3])
-    with col1:
-        new_q_name = st.text_input("Name", placeholder="my_query", key="new_q_name")
-    with col2:
-        new_q_text = st.text_area("Question text", placeholder="What to search for...", height=80, key="new_q_text")
-    
-    if st.button("➕ Add Question") and new_q_name and new_q_text:
-        queries[new_q_name] = new_q_text
-        save_queries(queries)
-        log_event(AUDIT_PATH, "query_added", {
-            "name": new_q_name,
-            "text_preview": new_q_text[:100],
-        })
-        st.success(f"Added '{new_q_name}'")
-        st.rerun()
-    
-    st.divider()
-    
-    # ===== RUN VALIDATION =====
-    st.subheader("Run Validation")
-    
-    col1, col2, col3, col4, col5 = st.columns(5)
-    with col1:
-        st.metric("Questions", len(queries))
-    with col2:
-        st.metric("Reference Passages", len(gold))
-    with col3:
-        limit = st.number_input(
-            "Results per question",
-            min_value=5,
-            max_value=100,
-            value=20,
-            help="How many passages to retrieve for each question.",
-        )
-    with col4:
-        overlap_threshold = st.slider(
-            "Match strictness",
-            min_value=0.1,
-            max_value=0.9,
-            value=0.3,
-            step=0.05,
-            help=(
-                "How much of a reference passage must appear in a retrieved passage "
-                "to count as 'found'.\n\n"
-                "0.3 = lenient (≥30% of words match)\n"
-                "0.5 = stricter (≥50%)\n"
-                "0.7+ = very strict"
-            ),
-        )
-    with col5:
-        semantic_threshold = st.slider(
-            "Meaning similarity threshold",
-            min_value=0.5,
-            max_value=0.95,
-            value=0.75,
-            step=0.05,
-            help=(
-                "Minimum meaning similarity for a cross-lingual match.\n\n"
-                "When word matching fails but the meaning is similar enough, "
-                "the reference passage counts as found.\n\n"
-                "0.75 = balanced (default)\n"
-                "0.85+ = stricter"
-            ),
-        )
-    
-    can_run = len(queries) > 0 and len(gold) > 0
-    
-    if not can_run:
-        if len(queries) == 0:
-            st.warning("Add at least one research question above.")
-        if len(gold) == 0:
-            st.warning("Add at least one reference passage above.")
-    
-    if st.button("▶️ Run Validation", disabled=not can_run):
-        # Clear old results first
-        st.session_state.eval_results = None
-        results = _do_run_evaluation(
-            queries, limit, overlap_threshold, semantic_threshold,
-        )
-        st.session_state.eval_results = results
-        best = max(results, key=lambda r: r.recall)
-        log_event(AUDIT_PATH, "evaluation_run", {
-            "query_names": list(queries.keys()),
-            "gold_sections_count": len(gold),
-            "results_limit": limit,
-            "overlap_threshold": overlap_threshold,
-            "semantic_threshold": semantic_threshold,
-            "best_query": best.name,
-            "best_recall": round(best.recall, 3),
-        })
-        st.rerun()
-    
-    # Results
-    if st.session_state.eval_results:
         st.divider()
-        st.subheader("Results")
+    
+        # ===== RUN VALIDATION =====
+        st.subheader("Run Validation")
+    
+        col1, col2, col3, col4, col5 = st.columns(5)
+        with col1:
+            st.metric("Questions", len(queries))
+        with col2:
+            st.metric("Reference Passages", len(gold))
+        with col3:
+            limit = st.number_input(
+                "Results per question",
+                min_value=5,
+                max_value=100,
+                value=20,
+                help="How many passages to retrieve for each question.",
+            )
+        with col4:
+            overlap_threshold = st.slider(
+                "Match strictness",
+                min_value=0.1,
+                max_value=0.9,
+                value=0.3,
+                step=0.05,
+                help=(
+                    "How much of a reference passage must appear in a retrieved passage "
+                    "to count as 'found'.\n\n"
+                    "0.3 = lenient (≥30% of words match)\n"
+                    "0.5 = stricter (≥50%)\n"
+                    "0.7+ = very strict"
+                ),
+            )
+        with col5:
+            semantic_threshold = st.slider(
+                "Meaning similarity threshold",
+                min_value=0.5,
+                max_value=0.95,
+                value=0.75,
+                step=0.05,
+                help=(
+                    "Minimum meaning similarity for a cross-lingual match.\n\n"
+                    "When word matching fails but the meaning is similar enough, "
+                    "the reference passage counts as found.\n\n"
+                    "0.75 = balanced (default)\n"
+                    "0.85+ = stricter"
+                ),
+            )
+    
+        can_run = len(queries) > 0 and len(gold) > 0
+    
+        if not can_run:
+            if len(queries) == 0:
+                st.warning("Add at least one research question above.")
+            if len(gold) == 0:
+                st.warning("Add at least one reference passage above.")
+    
+        if st.button("▶️ Run Validation", disabled=not can_run):
+            # Clear old results first
+            st.session_state.eval_results = None
+            results = _do_run_evaluation(
+                queries, limit, overlap_threshold, semantic_threshold,
+            )
+            st.session_state.eval_results = results
+            best = max(results, key=lambda r: r.recall)
+            log_event(AUDIT_PATH, "evaluation_run", {
+                "query_names": list(queries.keys()),
+                "gold_sections_count": len(gold),
+                "results_limit": limit,
+                "overlap_threshold": overlap_threshold,
+                "semantic_threshold": semantic_threshold,
+                "best_query": best.name,
+                "best_recall": round(best.recall, 3),
+            })
+            st.rerun()
+    
+        # Results
+        if st.session_state.eval_results:
+            st.divider()
+            st.subheader("Results")
         
-        results = st.session_state.eval_results
-        sorted_results = sorted(results, key=lambda x: x.recall, reverse=True)
+            results = st.session_state.eval_results
+            sorted_results = sorted(results, key=lambda x: x.recall, reverse=True)
         
-        # Summary
-        for r in sorted_results:
-            emoji = "🟢" if r.recall >= 0.8 else "🟡" if r.recall >= 0.5 else "🔴"
-            cols = st.columns([2, 1, 1, 2])
-            with cols[0]:
-                st.markdown(f"{emoji} **{r.name}**")
-            with cols[1]:
-                st.markdown(f'<span title="What percentage of reference passages were found by this question">Coverage: <strong>{r.recall:.0%}</strong></span>', unsafe_allow_html=True)
-            with cols[2]:
-                st.markdown(f'<span title="What percentage of retrieved results were actually relevant">Accuracy: {r.precision:.0%}</span>', unsafe_allow_html=True)
-            with cols[3]:
-                st.markdown(f'<span title="How many reference passages were matched out of the total">Found {r.found}/{r.total_gold} reference passages</span>', unsafe_allow_html=True)
+            # Summary
+            for r in sorted_results:
+                emoji = "🟢" if r.recall >= 0.8 else "🟡" if r.recall >= 0.5 else "🔴"
+                cols = st.columns([2, 1, 1, 2])
+                with cols[0]:
+                    st.markdown(f"{emoji} **{r.name}**")
+                with cols[1]:
+                    st.markdown(f'<span title="What percentage of reference passages were found by this question">Coverage: <strong>{r.recall:.0%}</strong></span>', unsafe_allow_html=True)
+                with cols[2]:
+                    st.markdown(f'<span title="What percentage of retrieved results were actually relevant">Accuracy: {r.precision:.0%}</span>', unsafe_allow_html=True)
+                with cols[3]:
+                    st.markdown(f'<span title="How many reference passages were matched out of the total">Found {r.found}/{r.total_gold} reference passages</span>', unsafe_allow_html=True)
         
-        st.caption(
-            "Coverage = % of reference passages found | "
-            "Accuracy = % of results that were relevant | "
-            "Hover any value for details"
-        )
+            st.caption(
+                "Coverage = % of reference passages found | "
+                "Accuracy = % of results that were relevant | "
+                "Hover any value for details"
+            )
 
-        st.divider()
-        best = sorted_results[0]
-        show_success(f"Best: '{best.name}' with {best.recall:.0%} coverage")
+            st.divider()
+            best = sorted_results[0]
+            show_success(f"Best: '{best.name}' with {best.recall:.0%} coverage")
         
-        # Details
-        for r in sorted_results:
-            with st.expander(f"📊 {r.name} — {r.recall:.0%} coverage"):
-                st.markdown("**Research question:**")
-                st.markdown(f'<div style="background:#f9fafb; border:1px solid #e5e7eb; border-radius:6px; padding:0.75rem; font-size:0.9rem; color:#1a1a1a; margin:0.5rem 0; white-space:pre-wrap;">{html_mod.escape(r.query)}</div>', unsafe_allow_html=True)
+            # Details
+            for r in sorted_results:
+                with st.expander(f"📊 {r.name} — {r.recall:.0%} coverage"):
+                    st.markdown("**Research question:**")
+                    st.markdown(f'<div style="background:#f9fafb; border:1px solid #e5e7eb; border-radius:6px; padding:0.75rem; font-size:0.9rem; color:#1a1a1a; margin:0.5rem 0; white-space:pre-wrap;">{html_mod.escape(r.query)}</div>', unsafe_allow_html=True)
 
-                # Retrieved chunks summary
-                if r.retrieved_chunks:
-                    with st.expander(f"📦 Retrieved Passages ({len(r.retrieved_chunks)})", expanded=False):
-                        for chunk in r.retrieved_chunks[:20]:
-                            doc = _pretty_doc_name(chunk.document_uri)
-                            pages = ", ".join(map(str, chunk.page_numbers)) if chunk.page_numbers else "—"
-                            preview = chunk.content[:120].replace("\n", " ")
-                            if len(chunk.content) > 120:
-                                preview += "..."
-                            st.markdown(
-                                f'<span class="rank-badge" title="Position in search results">#{chunk.rank}</span> '
-                                f'<span class="score-badge" title="Relevance score: how closely this passage matches your question (0–100%)">Relevance {chunk.score:.1%}</span> '
-                                f'{html_mod.escape(doc)} · Pages {pages}<br>'
-                                f'<span class="chunk-meta">{html_mod.escape(preview)}</span>',
-                                unsafe_allow_html=True,
-                            )
-                            st.markdown("---")
+                    # Retrieved chunks summary
+                    if r.retrieved_chunks:
+                        with st.expander(f"📦 Retrieved Passages ({len(r.retrieved_chunks)})", expanded=False):
+                            for chunk in r.retrieved_chunks[:20]:
+                                doc = _pretty_doc_name(chunk.document_uri)
+                                pages = ", ".join(map(str, chunk.page_numbers)) if chunk.page_numbers else "—"
+                                preview = chunk.content[:120].replace("\n", " ")
+                                if len(chunk.content) > 120:
+                                    preview += "..."
+                                st.markdown(
+                                    f'<span class="rank-badge" title="Position in search results">#{chunk.rank}</span> '
+                                    f'<span class="score-badge" title="Relevance score: how closely this passage matches your question (0–100%)">Relevance {chunk.score:.1%}</span> '
+                                    f'{html_mod.escape(doc)} · Pages {pages}<br>'
+                                    f'<span class="chunk-meta">{html_mod.escape(preview)}</span>',
+                                    unsafe_allow_html=True,
+                                )
+                                st.markdown("---")
 
-                # Matched sections
-                if r.match_details:
-                    st.markdown(f"**Matched passages ({len(r.match_details)}):**")
-                    for i, detail in enumerate(r.match_details):
-                        sem_label = f" · {detail.semantic_similarity:.0%} meaning similarity" if detail.semantic_similarity > 0 else ""
-                        match_label = _MATCH_TYPE_LABELS.get(detail.match_type, detail.match_type)
-                        with st.expander(f"Match {i+1} — {match_label} · {detail.overlap_ratio:.0%} word match{sem_label}", expanded=False):
-                            col_g, col_c = st.columns(2)
-                            with col_g:
-                                st.markdown("**Reference passage:**")
-                                highlighted = highlight_overlap(detail.gold_text_preview, detail.overlapping_words)
-                                st.markdown(highlighted, unsafe_allow_html=True)
-                            with col_c:
+                    # Matched sections
+                    if r.match_details:
+                        st.markdown(f"**Matched passages ({len(r.match_details)}):**")
+                        for i, detail in enumerate(r.match_details):
+                            sem_label = f" · {detail.semantic_similarity:.0%} meaning similarity" if detail.semantic_similarity > 0 else ""
+                            match_label = _MATCH_TYPE_LABELS.get(detail.match_type, detail.match_type)
+                            with st.expander(f"Match {i+1} — {match_label} · {detail.overlap_ratio:.0%} word match{sem_label}", expanded=False):
+                                col_g, col_c = st.columns(2)
+                                with col_g:
+                                    st.markdown("**Reference passage:**")
+                                    highlighted = highlight_overlap(detail.gold_text_preview, detail.overlapping_words)
+                                    st.markdown(highlighted, unsafe_allow_html=True)
+                                with col_c:
+                                    if detail.matched_chunk:
+                                        chunk = detail.matched_chunk
+                                        st.markdown("**Best matching passage:**")
+                                        badges = (
+                                            f'<span class="rank-badge" title="Position in search results">#{chunk.rank}</span> '
+                                            f'<span class="score-badge" title="Relevance score: how closely this passage matches your question (0–100%)">Relevance {chunk.score:.1%}</span>'
+                                        )
+                                        if detail.semantic_similarity > 0:
+                                            badges += f' <span class="semantic-badge">{detail.semantic_similarity:.0%} meaning similarity</span>'
+                                        st.markdown(badges, unsafe_allow_html=True)
+                                        chunk_preview = chunk.content[:200].replace("\n", " ")
+                                        if len(chunk.content) > 200:
+                                            chunk_preview += "..."
+                                        chunk_highlighted = highlight_overlap(chunk_preview, detail.overlapping_words)
+                                        st.markdown(chunk_highlighted, unsafe_allow_html=True)
+
+                    # Missed sections
+                    if r.miss_details:
+                        st.markdown(f"**Missed passages ({len(r.miss_details)}):**")
+                        for i, detail in enumerate(r.miss_details):
+                            sem_label = f" · {detail.semantic_similarity:.0%} meaning similarity" if detail.semantic_similarity > 0 else ""
+                            with st.expander(f"Missed {i+1} — only {detail.overlap_ratio:.0%} word match{sem_label} with nearest passage", expanded=True):
+                                st.markdown(
+                                    f'<div class="overlap-miss">{html_mod.escape(detail.gold_text_preview)}</div>',
+                                    unsafe_allow_html=True,
+                                )
                                 if detail.matched_chunk:
                                     chunk = detail.matched_chunk
-                                    st.markdown("**Best matching passage:**")
+                                    doc = _pretty_doc_name(chunk.document_uri)
                                     badges = (
                                         f'<span class="rank-badge" title="Position in search results">#{chunk.rank}</span> '
                                         f'<span class="score-badge" title="Relevance score: how closely this passage matches your question (0–100%)">Relevance {chunk.score:.1%}</span>'
                                     )
                                     if detail.semantic_similarity > 0:
                                         badges += f' <span class="semantic-badge">{detail.semantic_similarity:.0%} meaning similarity</span>'
-                                    st.markdown(badges, unsafe_allow_html=True)
+                                    st.markdown(
+                                        f'**Nearest passage:** {badges} '
+                                        f'· {html_mod.escape(doc)}',
+                                        unsafe_allow_html=True,
+                                    )
+                                    st.markdown(
+                                        f"**{detail.overlap_ratio:.0%}** word match "
+                                        f"({len(detail.overlapping_words)} shared words) — "
+                                        f"below the {int(overlap_threshold * 100)}% threshold needed to count as a match"
+                                    )
                                     chunk_preview = chunk.content[:200].replace("\n", " ")
                                     if len(chunk.content) > 200:
                                         chunk_preview += "..."
-                                    chunk_highlighted = highlight_overlap(chunk_preview, detail.overlapping_words)
-                                    st.markdown(chunk_highlighted, unsafe_allow_html=True)
+                                    st.markdown(f'<div style="background:#f9fafb; border:1px solid #e5e7eb; border-radius:6px; padding:0.75rem; font-size:0.9rem; color:#1a1a1a; margin:0.5rem 0; white-space:pre-wrap;">{html_mod.escape(chunk_preview)}</div>', unsafe_allow_html=True)
+                                else:
+                                    st.markdown("No passages retrieved.")
+                    elif r.missed_texts:
+                        # Fallback for old-format results
+                        st.markdown(f"**Missed passages ({len(r.missed_texts)}):**")
+                        for i, text in enumerate(r.missed_texts):
+                            with st.expander(f"Missed {i+1} ({len(text)} chars)", expanded=True):
+                                st.markdown(f'<div style="background:#f9fafb; border:1px solid #e5e7eb; border-radius:6px; padding:0.75rem; font-size:0.9rem; color:#1a1a1a; margin:0.5rem 0; white-space:pre-wrap;">{html_mod.escape(text)}</div>', unsafe_allow_html=True)
 
-                # Missed sections
-                if r.miss_details:
-                    st.markdown(f"**Missed passages ({len(r.miss_details)}):**")
-                    for i, detail in enumerate(r.miss_details):
-                        sem_label = f" · {detail.semantic_similarity:.0%} meaning similarity" if detail.semantic_similarity > 0 else ""
-                        with st.expander(f"Missed {i+1} — only {detail.overlap_ratio:.0%} word match{sem_label} with nearest passage", expanded=True):
-                            st.markdown(
-                                f'<div class="overlap-miss">{html_mod.escape(detail.gold_text_preview)}</div>',
-                                unsafe_allow_html=True,
-                            )
-                            if detail.matched_chunk:
-                                chunk = detail.matched_chunk
-                                doc = _pretty_doc_name(chunk.document_uri)
-                                badges = (
-                                    f'<span class="rank-badge" title="Position in search results">#{chunk.rank}</span> '
-                                    f'<span class="score-badge" title="Relevance score: how closely this passage matches your question (0–100%)">Relevance {chunk.score:.1%}</span>'
-                                )
-                                if detail.semantic_similarity > 0:
-                                    badges += f' <span class="semantic-badge">{detail.semantic_similarity:.0%} meaning similarity</span>'
-                                st.markdown(
-                                    f'**Nearest passage:** {badges} '
-                                    f'· {html_mod.escape(doc)}',
-                                    unsafe_allow_html=True,
-                                )
-                                st.markdown(
-                                    f"**{detail.overlap_ratio:.0%}** word match "
-                                    f"({len(detail.overlapping_words)} shared words) — "
-                                    f"below the {int(overlap_threshold * 100)}% threshold needed to count as a match"
-                                )
-                                chunk_preview = chunk.content[:200].replace("\n", " ")
-                                if len(chunk.content) > 200:
-                                    chunk_preview += "..."
-                                st.markdown(f'<div style="background:#f9fafb; border:1px solid #e5e7eb; border-radius:6px; padding:0.75rem; font-size:0.9rem; color:#1a1a1a; margin:0.5rem 0; white-space:pre-wrap;">{html_mod.escape(chunk_preview)}</div>', unsafe_allow_html=True)
-                            else:
-                                st.markdown("No passages retrieved.")
-                elif r.missed_texts:
-                    # Fallback for old-format results
-                    st.markdown(f"**Missed passages ({len(r.missed_texts)}):**")
-                    for i, text in enumerate(r.missed_texts):
-                        with st.expander(f"Missed {i+1} ({len(text)} chars)", expanded=True):
-                            st.markdown(f'<div style="background:#f9fafb; border:1px solid #e5e7eb; border-radius:6px; padding:0.75rem; font-size:0.9rem; color:#1a1a1a; margin:0.5rem 0; white-space:pre-wrap;">{html_mod.escape(text)}</div>', unsafe_allow_html=True)
-
-        # Export Report button
-        st.divider()
-        report_config = {
-            "embedding_model": "Qwen3-Embedding-4B (via Ollama)",
-            "chunk_size": 512,
-            "search_method": "Hybrid (vector + full-text with RRF reranking)",
-            "results_limit": limit,
-            "overlap_threshold": overlap_threshold,
-            "semantic_threshold": semantic_threshold,
-            "indexed_pdfs": list(index_meta.get("pdfs", [])),
-        }
-        report_md = generate_report(
-            results=results,
-            queries=queries,
-            gold_standard=gold,
-            config=report_config,
-            audit_events=load_events(AUDIT_PATH),
-        )
-        st.download_button(
-            "📥 Export Report",
-            data=report_md,
-            file_name=f"search_validation_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md",
-            mime="text/markdown",
-        )
+            # Export Report button
+            st.divider()
+            report_config = {
+                "embedding_model": "Qwen3-Embedding-4B (via Ollama)",
+                "chunk_size": 512,
+                "search_method": "Hybrid (vector + full-text with RRF reranking)",
+                "results_limit": limit,
+                "overlap_threshold": overlap_threshold,
+                "semantic_threshold": semantic_threshold,
+                "indexed_pdfs": list(index_meta.get("pdfs", [])),
+            }
+            report_md = generate_report(
+                results=results,
+                queries=queries,
+                gold_standard=gold,
+                config=report_config,
+                audit_events=load_events(AUDIT_PATH),
+            )
+            st.download_button(
+                "📥 Export Report",
+                data=report_md,
+                file_name=f"search_validation_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md",
+                mime="text/markdown",
+            )
 
 
 # ============ TAB 4: Validate Search ============
@@ -1140,151 +1163,155 @@ with tab3:
     index_meta = load_index_meta()
     if not index_meta.get("pdfs"):
         show_warn("Prepare your documents first (Step 2) before searching.")
-        st.stop()
+    else:
     
-    query = st.text_area(
-        "What are you looking for?",
-        placeholder="Type a research question or describe what you want to find...",
-        height=100
-    )
-
-    if not query:
-        st.caption(
-            'Example questions: _"How is algorithmic bias discussed in the context of healthcare?"_ · '
-            '_"What evidence exists for disparities in data collection?"_ · '
-            '_"Which policies address equity in health data governance?"_'
+        query = st.text_area(
+            "What are you looking for?",
+            placeholder="Type a research question or describe what you want to find...",
+            height=100
         )
 
-    col1, col2, col3 = st.columns([2, 1, 1])
-    with col2:
-        limit = st.number_input("Max results", min_value=5, max_value=2000, value=10, key="search_limit", help="More results = more comprehensive but slower to scroll through.")
-    with col3:
-        cross_lingual = st.checkbox(
-            "Cross-lingual",
-            value=True,
-            help="Also search with the question translated to the other language (DE↔EN). Uses offline translation.",
-        )
+        if not query:
+            st.caption(
+                'Example questions: _"How is algorithmic bias discussed in the context of healthcare?"_ · '
+                '_"What evidence exists for disparities in data collection?"_ · '
+                '_"Which policies address equity in health data governance?"_'
+            )
 
-    if st.button("🔍 Search", disabled=not query):
-        translated_query = None
-        if cross_lingual:
-            try:
-                from src.hdj.translate import translate_query as _tq
-                _, translated_query = _tq(query)
-            except Exception:
-                pass
-        with st.spinner("Searching..."):
-            results = asyncio.run(search_documents(query, limit, cross_lingual=cross_lingual))
-            st.session_state.search_results = results
-            st.session_state.search_translated_query = translated_query
-            st.session_state.search_query = query
-            log_event(AUDIT_PATH, "search_performed", {
-                "query_preview": query[:100],
-                "results_count": len(results),
-                "limit": limit,
-                "cross_lingual": cross_lingual,
-            })
-        st.rerun()
+        col1, col2, col3 = st.columns([2, 1, 1])
+        with col2:
+            limit = st.number_input("Max results", min_value=5, max_value=2000, value=10, key="search_limit", help="More results = more comprehensive but slower to scroll through.")
+        with col3:
+            cross_lingual = st.checkbox(
+                "Cross-lingual",
+                value=True,
+                help="Also search with the question translated to the other language (DE↔EN). Uses offline translation.",
+            )
 
-    if st.session_state.search_results:
-        st.divider()
-        translated_q = st.session_state.get("search_translated_query")
-        if translated_q:
-            st.caption(f"Also searched with translation: _{translated_q}_")
-        results = st.session_state.search_results
+        if st.button("🔍 Search", disabled=not query):
+            translated_query = None
+            if cross_lingual:
+                try:
+                    from src.hdj.translate import translate_query as _tq
+                    _, translated_query = _tq(query)
+                except Exception:
+                    pass
+            with st.spinner("Searching..."):
+                loop = asyncio.new_event_loop()
+                try:
+                    results = loop.run_until_complete(search_documents(query, limit, cross_lingual=cross_lingual))
+                finally:
+                    loop.close()
+                st.session_state.search_results = results
+                st.session_state.search_translated_query = translated_query
+                st.session_state.search_query = query
+                log_event(AUDIT_PATH, "search_performed", {
+                    "query_preview": query[:100],
+                    "results_count": len(results),
+                    "limit": limit,
+                    "cross_lingual": cross_lingual,
+                })
+            st.rerun()
 
-        # Summary line
-        doc_names = {_pretty_doc_name(r.get("document_uri")) for r in results}
-        st.markdown(f"**Found {len(results)} relevant passages across {len(doc_names)} documents**")
+        if st.session_state.search_results:
+            st.divider()
+            translated_q = st.session_state.get("search_translated_query")
+            if translated_q:
+                st.caption(f"Also searched with translation: _{translated_q}_")
+            results = st.session_state.search_results
 
-        for i, r in enumerate(results):
-            pages = r.get("page_numbers", [])
-            content = r.get("content", "")
-            score = r.get("score", 0.0)
-            doc = _pretty_doc_name(r.get("document_uri"))
+            # Summary line
+            doc_names = {_pretty_doc_name(r.get("document_uri")) for r in results}
+            st.markdown(f"**Found {len(results)} relevant passages across {len(doc_names)} documents**")
 
-            # Page label
-            if pages:
-                if len(pages) == 1:
-                    page_label = f"Page {pages[0]}"
+            for i, r in enumerate(results):
+                pages = r.get("page_numbers", [])
+                content = r.get("content", "")
+                score = r.get("score", 0.0)
+                doc = _pretty_doc_name(r.get("document_uri"))
+
+                # Page label
+                if pages:
+                    if len(pages) == 1:
+                        page_label = f"Page {pages[0]}"
+                    else:
+                        page_label = f"Pages {', '.join(map(str, pages))}"
                 else:
-                    page_label = f"Pages {', '.join(map(str, pages))}"
-            else:
-                page_label = ""
+                    page_label = ""
 
-            label = f"Result {i+1} · Relevance: {score:.1%} · {doc}"
-            if page_label:
-                label += f" · {page_label}"
-
-            with st.expander(label, expanded=i < 3):
-                # Document name as header
-                st.markdown(f"**📄 {doc}**" + (f" — {page_label}" if page_label else ""))
-
-                # Relevance progress bar
-                st.progress(min(score, 1.0), text=f"Relevance: {score:.1%}")
-
-                # Passage content as styled div instead of disabled textarea
-                st.markdown(
-                    f'<div style="background:#f9fafb; border:1px solid #e5e7eb; border-radius:6px; '
-                    f'padding:0.75rem; font-size:0.9rem; color:#1a1a1a; margin:0.5rem 0; '
-                    f'white-space:pre-wrap; line-height:1.6; max-height:400px; overflow-y:auto;">'
-                    f'{html_mod.escape(content)}</div>',
-                    unsafe_allow_html=True,
-                )
-
-                # Copy Citation button
-                citation_text = content[:150].replace("\n", " ")
-                if len(content) > 150:
-                    citation_text += "..."
-                citation = f'"{citation_text}" ({doc}'
+                label = f"Result {i+1} · Relevance: {score:.1%} · {doc}"
                 if page_label:
-                    citation += f", {page_label}"
-                citation += ")"
-                col_cite, col_save = st.columns(2)
-                with col_cite:
-                    if st.button("📋 Copy Citation", key=f"cite_{i}"):
-                        st.code(citation, language=None)
-                        st.caption("Select and copy the text above.")
-                with col_save:
-                    collections_data = load_collections()
-                    existing_collections = list(collections_data["collections"].keys())
-                    save_options = existing_collections + ["+ New collection..."]
-                    selected_col = st.selectbox(
-                        "Save to",
-                        save_options,
-                        key=f"save_col_{i}",
-                        label_visibility="collapsed",
-                        placeholder="Save to collection...",
+                    label += f" · {page_label}"
+
+                with st.expander(label, expanded=i < 3):
+                    # Document name as header
+                    st.markdown(f"**📄 {doc}**" + (f" — {page_label}" if page_label else ""))
+
+                    # Relevance progress bar
+                    st.progress(min(score, 1.0), text=f"Relevance: {score:.1%}")
+
+                    # Passage content as styled div instead of disabled textarea
+                    st.markdown(
+                        f'<div style="background:#f9fafb; border:1px solid #e5e7eb; border-radius:6px; '
+                        f'padding:0.75rem; font-size:0.9rem; color:#1a1a1a; margin:0.5rem 0; '
+                        f'white-space:pre-wrap; line-height:1.6; max-height:400px; overflow-y:auto;">'
+                        f'{html_mod.escape(content)}</div>',
+                        unsafe_allow_html=True,
                     )
-                    if selected_col == "+ New collection...":
-                        new_col_name = st.text_input(
-                            "Collection name",
-                            key=f"new_col_name_{i}",
-                            placeholder="Enter collection name...",
+
+                    # Copy Citation button
+                    citation_text = content[:150].replace("\n", " ")
+                    if len(content) > 150:
+                        citation_text += "..."
+                    citation = f'"{citation_text}" ({doc}'
+                    if page_label:
+                        citation += f", {page_label}"
+                    citation += ")"
+                    col_cite, col_save = st.columns(2)
+                    with col_cite:
+                        if st.button("📋 Copy Citation", key=f"cite_{i}"):
+                            st.code(citation, language=None)
+                            st.caption("Select and copy the text above.")
+                    with col_save:
+                        collections_data = load_collections()
+                        existing_collections = list(collections_data["collections"].keys())
+                        save_options = existing_collections + ["+ New collection..."]
+                        selected_col = st.selectbox(
+                            "Save to",
+                            save_options,
+                            key=f"save_col_{i}",
+                            label_visibility="collapsed",
+                            placeholder="Save to collection...",
                         )
-                    if st.button("📌 Save Passage", key=f"save_{i}"):
-                        target_collection = selected_col
                         if selected_col == "+ New collection...":
-                            new_col_name = st.session_state.get(f"new_col_name_{i}", "").strip()
-                            if not new_col_name:
-                                st.warning("Please enter a name for the new collection.")
-                                st.stop()
-                            target_collection = new_col_name
-                        search_q = st.session_state.get("search_query", "")
-                        add_to_collection(target_collection, {
-                            "content": content,
-                            "document": doc,
-                            "page_numbers": pages,
-                            "relevance_score": round(score, 4),
-                            "saved_at": datetime.now().isoformat(),
-                            "search_query": search_q,
-                        })
-                        log_event(AUDIT_PATH, "passage_saved", {
-                            "collection": target_collection,
-                            "document": doc,
-                        })
-                        st.success(f"Saved to '{target_collection}'!")
-                        st.rerun()
+                            new_col_name = st.text_input(
+                                "Collection name",
+                                key=f"new_col_name_{i}",
+                                placeholder="Enter collection name...",
+                            )
+                        if st.button("📌 Save Passage", key=f"save_{i}"):
+                            target_collection = selected_col
+                            if selected_col == "+ New collection...":
+                                new_col_name = st.session_state.get(f"new_col_name_{i}", "").strip()
+                                if not new_col_name:
+                                    st.warning("Please enter a name for the new collection.")
+                                    st.stop()
+                                target_collection = new_col_name
+                            search_q = st.session_state.get("search_query", "")
+                            add_to_collection(target_collection, {
+                                "content": content,
+                                "document": doc,
+                                "page_numbers": pages,
+                                "relevance_score": round(score, 4),
+                                "saved_at": datetime.now().isoformat(),
+                                "search_query": search_q,
+                            })
+                            log_event(AUDIT_PATH, "passage_saved", {
+                                "collection": target_collection,
+                                "document": doc,
+                            })
+                            st.success(f"Saved to '{target_collection}'!")
+                            st.rerun()
 
 
 # ============ TAB: My Findings ============
@@ -1305,19 +1332,24 @@ with tab_findings:
         col_csv, col_md = st.columns(2)
         with col_csv:
             # Build CSV
-            csv_lines = ["Collection,Document,Page Numbers,Relevance,Saved At,Search Query,Passage"]
+            buf = io.StringIO()
+            writer = csv.writer(buf)
+            writer.writerow(["Collection", "Document", "Page Numbers", "Relevance", "Saved At", "Search Query", "Passage"])
             for cname, cdata in all_collections.items():
                 for p in cdata["passages"]:
-                    escaped = p["content"].replace('"', '""').replace("\n", " ")
-                    pgs = "; ".join(map(str, p.get("page_numbers", [])))
-                    csv_lines.append(
-                        f'"{cname}","{p.get("document", "")}","{pgs}",'
-                        f'{p.get("relevance_score", 0)},"{p.get("saved_at", "")}",'
-                        f'"{p.get("search_query", "")}","{escaped}"'
-                    )
+                    writer.writerow([
+                        cname,
+                        p.get("document", ""),
+                        "; ".join(map(str, p.get("page_numbers", []))),
+                        p.get("relevance_score", 0),
+                        p.get("saved_at", ""),
+                        p.get("search_query", ""),
+                        p["content"],
+                    ])
+            csv_data = buf.getvalue()
             st.download_button(
                 "📥 Export CSV",
-                data="\n".join(csv_lines),
+                data=csv_data,
                 file_name=f"findings_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
                 mime="text/csv",
             )

@@ -187,7 +187,7 @@ class Evaluator:
         semantic_threshold: float = 0.75,
     ) -> "Evaluator":
         """Load gold standard from JSON file."""
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             data = json.load(f)
         texts = [item["text"] for item in data]
         return cls(texts, overlap_threshold, semantic_threshold=semantic_threshold)
@@ -218,6 +218,10 @@ class Evaluator:
         """
         retrieved_lower = retrieved.lower()
         gold_lower = gold.lower()
+
+        # Guard: empty strings should not match
+        if not retrieved_lower.strip() or not gold_lower.strip():
+            return (False, 0.0, [], "none")
 
         # Substring match — exact containment, no filtering needed
         if gold_lower in retrieved_lower or retrieved_lower in gold_lower:
@@ -426,7 +430,7 @@ def save_results(results: list[QueryResult], output_dir: Path) -> Path:
         "results": [r.to_dict() for r in results],
     }
 
-    with open(output_path, "w") as f:
+    with open(output_path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
 
     return output_path

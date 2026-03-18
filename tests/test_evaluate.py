@@ -154,17 +154,13 @@ class TestTextOverlap:
         assert ratio == 0.0
         assert mtype == "none"
 
-    def test_empty_retrieved_is_substring(self):
-        """Empty retrieved text is technically a substring of any gold text.
-
-        Python: '' in 'anything' → True. The code treats this as a substring
-        match, which is fine in practice since search never returns empty chunks.
-        """
+    def test_empty_retrieved_does_not_match(self):
+        """Empty retrieved text should not match any gold text."""
         gold = "biometric databases"
         retrieved = ""
         is_match, _, _, mtype = self.ev._text_overlap(retrieved, gold)
-        assert is_match is True
-        assert mtype == "substring"
+        assert is_match is False
+        assert mtype == "none"
 
     def test_stopwords_dont_inflate_overlap(self):
         """Two texts sharing only stopwords should NOT match."""

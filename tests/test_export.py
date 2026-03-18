@@ -92,7 +92,7 @@ class TestGenerateReport:
         result, queries, gold, config = sample_data
         report = generate_report([result], queries, gold, config)
         assert "TestModel" in report
-        assert "~256 words" in report
+        assert "~256 tokens" in report
 
     def test_report_contains_results_table(self, sample_data):
         result, queries, gold, config = sample_data
@@ -193,4 +193,4 @@ class TestGenerateReport:
         )
         report = generate_report([result], {"q": "q"}, gold, {"indexed_pdfs": []})
         assert "### a.pdf (2 passages)" in report
-        assert "### b.pdf (1 passages)" in report
+        assert "### b.pdf (1 passage)" in report

@@ -62,7 +62,7 @@ def generate_report(
     # Configuration
     lines.append("## Configuration")
     lines.append(f"- Embedding model: {embedding_model}")
-    lines.append(f"- Passage size: ~{chunk_size} words")
+    lines.append(f"- Passage size: ~{chunk_size} tokens")
     lines.append(f"- Search: {search_method}")
     lines.append(f"- Results per question: {results_limit}")
     lines.append(f"- Match strictness: {overlap_threshold} ({threshold_pct}% word match)")
@@ -74,7 +74,7 @@ def generate_report(
     lines.append("")
     lines.append("How each search result was evaluated:")
     lines.append("")
-    lines.append(f"1. **Preparation**: Each PDF is split into short passages (~{chunk_size} words) and indexed for search")
+    lines.append(f"1. **Preparation**: Each PDF is split into short passages (~{chunk_size} tokens) and indexed for search")
     lines.append("2. **Indexing**: Passages are stored in a local search database")
     lines.append(f"3. **Search**: {search_method}, returning top {results_limit} results per question")
     lines.append(f"4. **Matching**: Each reference passage is compared to every retrieved passage using word-level matching (common words filtered out)")
@@ -107,7 +107,9 @@ def generate_report(
         by_file.setdefault(src, []).append(entry)
 
     for filename, entries in by_file.items():
-        lines.append(f"### {filename} ({len(entries)} passages)")
+        count = len(entries)
+        label = "passage" if count == 1 else "passages"
+        lines.append(f"### {filename} ({count} {label})")
         for i, entry in enumerate(entries, 1):
             text = entry.get("text", "")
             preview = text[:120].replace("\n", " ")
