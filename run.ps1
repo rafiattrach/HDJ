@@ -168,13 +168,20 @@ try {
 
 if (-not $ollamaRunning) {
     Write-Host "       Starting Ollama in the background..."
-    Start-Process "ollama" -ArgumentList "serve" -WindowStyle Hidden
 
-    # Wait up to 15 seconds for Ollama to come online
-    for ($i = 0; $i -lt 15; $i++) {
+    # On Windows, try the desktop app first (typical installation), then fall back to CLI
+    $ollamaDesktop = Join-Path $env:LOCALAPPDATA "Programs\Ollama\Ollama.exe"
+    if (Test-Path $ollamaDesktop) {
+        Start-Process $ollamaDesktop -WindowStyle Hidden
+    } else {
+        Start-Process "ollama" -ArgumentList "serve" -WindowStyle Hidden
+    }
+
+    # Wait up to 30 seconds for Ollama to come online (can be slow on first start)
+    for ($i = 0; $i -lt 30; $i++) {
         Start-Sleep -Seconds 1
         try {
-            $response = Invoke-WebRequest -Uri "http://localhost:11434/api/tags" -TimeoutSec 1 -ErrorAction SilentlyContinue
+            $response = Invoke-WebRequest -Uri "http://localhost:11434/api/tags" -TimeoutSec 2 -ErrorAction SilentlyContinue
             $ollamaRunning = $true
             break
         } catch {}
@@ -182,7 +189,7 @@ if (-not $ollamaRunning) {
 
     if (-not $ollamaRunning) {
         Print-Error "Ollama did not start in time." `
-                    "Open the Ollama app manually, then run this script again."
+                    "Open the Ollama app manually (search for 'Ollama' in the Start menu), then run this script again."
         Read-Host "Press Enter to close"
         exit 1
     }
