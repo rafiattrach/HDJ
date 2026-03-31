@@ -172,57 +172,26 @@ $ollamaRunning = Test-OllamaRunning
 if (-not $ollamaRunning) {
     Write-Host "       Starting Ollama in the background..."
 
-    # Strategy 1: try 'ollama serve' directly (works on all platforms)
+    # Try 'ollama serve' — if it errors with "bind" it means the server
+    # is already running (port taken), which is fine.
     $serveLog = Join-Path $env:TEMP "ollama_serve.log"
     Start-Process "ollama" -ArgumentList "serve" -WindowStyle Hidden `
         -RedirectStandardError $serveLog -ErrorAction SilentlyContinue
 
-    # Give ollama serve a chance (up to 20 seconds)
-    for ($i = 0; $i -lt 20; $i++) {
+    # Wait up to 30 seconds for Ollama to come online
+    for ($i = 0; $i -lt 30; $i++) {
         Start-Sleep -Seconds 1
         if (Test-OllamaRunning) { $ollamaRunning = $true; break }
-    }
 
-    # Strategy 2: if 'ollama serve' didn't work, try the desktop app
-    if (-not $ollamaRunning) {
-        Write-Host "       Trying Ollama desktop app..."
-
-        $ollamaDesktop = $null
-        $searchPaths = @(
-            (Join-Path $env:LOCALAPPDATA "Programs\Ollama\Ollama.exe"),
-            (Join-Path $env:LOCALAPPDATA "Ollama\Ollama.exe"),
-            (Join-Path $env:ProgramFiles "Ollama\Ollama.exe"),
-            (Join-Path ${env:ProgramFiles(x86)} "Ollama\Ollama.exe"),
-            (Join-Path $env:USERPROFILE "AppData\Local\Programs\Ollama\Ollama.exe")
-        )
-        foreach ($p in $searchPaths) {
-            if ($p -and (Test-Path $p)) {
-                $ollamaDesktop = $p
+        # Check if 'ollama serve' failed because the port is already taken
+        # — that means Ollama IS running, just our CLI check hasn't caught up
+        if (($i -eq 5) -and (Test-Path $serveLog)) {
+            $errText = Get-Content $serveLog -Raw -ErrorAction SilentlyContinue
+            if ($errText -match "bind|address already in use") {
+                Write-Host "       Ollama server is already running."
+                $ollamaRunning = $true
                 break
             }
-        }
-
-        # Also check next to the CLI executable
-        if (-not $ollamaDesktop) {
-            $ollamaCli = (Get-Command "ollama" -ErrorAction SilentlyContinue).Source
-            if ($ollamaCli) {
-                $ollamaDir = Split-Path -Parent $ollamaCli
-                $ollamaApp = Join-Path $ollamaDir "Ollama.exe"
-                if ((Test-Path $ollamaApp) -and ($ollamaApp -ne $ollamaCli)) {
-                    $ollamaDesktop = $ollamaApp
-                }
-            }
-        }
-
-        if ($ollamaDesktop) {
-            Write-Host "       Found Ollama at: $ollamaDesktop"
-            Start-Process $ollamaDesktop
-        }
-
-        # Wait up to 40 more seconds
-        for ($i = 0; $i -lt 40; $i++) {
-            Start-Sleep -Seconds 1
-            if (Test-OllamaRunning) { $ollamaRunning = $true; break }
         }
     }
 
