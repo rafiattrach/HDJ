@@ -159,12 +159,15 @@ if (-not (Get-Command "ollama" -ErrorAction SilentlyContinue)) {
     exit 1
 }
 
+# Helper: check if Ollama server is responsive using the CLI (more reliable
+# than Invoke-WebRequest, which can fail due to proxy/TLS on Windows PS 5.1)
+function Test-OllamaRunning {
+    $out = ollama list 2>&1 | Out-String
+    return ($LASTEXITCODE -eq 0 -and $out -notmatch "could not connect")
+}
+
 # Check if Ollama is running; if not, start it in the background
-$ollamaRunning = $false
-try {
-    $response = Invoke-WebRequest -Uri "http://localhost:11434/api/tags" -TimeoutSec 2 -ErrorAction SilentlyContinue
-    $ollamaRunning = $true
-} catch {}
+$ollamaRunning = Test-OllamaRunning
 
 if (-not $ollamaRunning) {
     Write-Host "       Starting Ollama in the background..."
@@ -177,11 +180,7 @@ if (-not $ollamaRunning) {
     # Give ollama serve a chance (up to 20 seconds)
     for ($i = 0; $i -lt 20; $i++) {
         Start-Sleep -Seconds 1
-        try {
-            $null = Invoke-WebRequest -Uri "http://localhost:11434/api/tags" -TimeoutSec 2 -ErrorAction Stop
-            $ollamaRunning = $true
-            break
-        } catch {}
+        if (Test-OllamaRunning) { $ollamaRunning = $true; break }
     }
 
     # Strategy 2: if 'ollama serve' didn't work, try the desktop app
@@ -223,11 +222,7 @@ if (-not $ollamaRunning) {
         # Wait up to 40 more seconds
         for ($i = 0; $i -lt 40; $i++) {
             Start-Sleep -Seconds 1
-            try {
-                $null = Invoke-WebRequest -Uri "http://localhost:11434/api/tags" -TimeoutSec 2 -ErrorAction Stop
-                $ollamaRunning = $true
-                break
-            } catch {}
+            if (Test-OllamaRunning) { $ollamaRunning = $true; break }
         }
     }
 
