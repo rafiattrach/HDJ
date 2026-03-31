@@ -169,27 +169,71 @@ try {
 if (-not $ollamaRunning) {
     Write-Host "       Starting Ollama in the background..."
 
-    # On Windows, try the desktop app first (typical installation), then fall back to CLI
-    $ollamaDesktop = Join-Path $env:LOCALAPPDATA "Programs\Ollama\Ollama.exe"
-    if (Test-Path $ollamaDesktop) {
-        Start-Process $ollamaDesktop -WindowStyle Hidden
-    } else {
-        Start-Process "ollama" -ArgumentList "serve" -WindowStyle Hidden
-    }
+    # Strategy 1: try 'ollama serve' directly (works on all platforms)
+    $serveLog = Join-Path $env:TEMP "ollama_serve.log"
+    Start-Process "ollama" -ArgumentList "serve" -WindowStyle Hidden `
+        -RedirectStandardError $serveLog -ErrorAction SilentlyContinue
 
-    # Wait up to 30 seconds for Ollama to come online (can be slow on first start)
-    for ($i = 0; $i -lt 30; $i++) {
+    # Give ollama serve a chance (up to 20 seconds)
+    for ($i = 0; $i -lt 20; $i++) {
         Start-Sleep -Seconds 1
         try {
-            $response = Invoke-WebRequest -Uri "http://localhost:11434/api/tags" -TimeoutSec 2 -ErrorAction SilentlyContinue
+            $null = Invoke-WebRequest -Uri "http://localhost:11434/api/tags" -TimeoutSec 2 -ErrorAction Stop
             $ollamaRunning = $true
             break
         } catch {}
     }
 
+    # Strategy 2: if 'ollama serve' didn't work, try the desktop app
     if (-not $ollamaRunning) {
-        Print-Error "Ollama did not start in time." `
-                    "Open the Ollama app manually (search for 'Ollama' in the Start menu), then run this script again."
+        Write-Host "       Trying Ollama desktop app..."
+
+        $ollamaDesktop = $null
+        $searchPaths = @(
+            (Join-Path $env:LOCALAPPDATA "Programs\Ollama\Ollama.exe"),
+            (Join-Path $env:LOCALAPPDATA "Ollama\Ollama.exe"),
+            (Join-Path $env:ProgramFiles "Ollama\Ollama.exe"),
+            (Join-Path ${env:ProgramFiles(x86)} "Ollama\Ollama.exe"),
+            (Join-Path $env:USERPROFILE "AppData\Local\Programs\Ollama\Ollama.exe")
+        )
+        foreach ($p in $searchPaths) {
+            if ($p -and (Test-Path $p)) {
+                $ollamaDesktop = $p
+                break
+            }
+        }
+
+        # Also check next to the CLI executable
+        if (-not $ollamaDesktop) {
+            $ollamaCli = (Get-Command "ollama" -ErrorAction SilentlyContinue).Source
+            if ($ollamaCli) {
+                $ollamaDir = Split-Path -Parent $ollamaCli
+                $ollamaApp = Join-Path $ollamaDir "Ollama.exe"
+                if ((Test-Path $ollamaApp) -and ($ollamaApp -ne $ollamaCli)) {
+                    $ollamaDesktop = $ollamaApp
+                }
+            }
+        }
+
+        if ($ollamaDesktop) {
+            Write-Host "       Found Ollama at: $ollamaDesktop"
+            Start-Process $ollamaDesktop
+        }
+
+        # Wait up to 40 more seconds
+        for ($i = 0; $i -lt 40; $i++) {
+            Start-Sleep -Seconds 1
+            try {
+                $null = Invoke-WebRequest -Uri "http://localhost:11434/api/tags" -TimeoutSec 2 -ErrorAction Stop
+                $ollamaRunning = $true
+                break
+            } catch {}
+        }
+    }
+
+    if (-not $ollamaRunning) {
+        Print-Error "Ollama did not start automatically." `
+                    "Please open the Ollama app manually (search for 'Ollama' in the Start menu), wait until its icon appears in the system tray, then run this script again."
         Read-Host "Press Enter to close"
         exit 1
     }
