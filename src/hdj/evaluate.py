@@ -104,10 +104,11 @@ ALL_STOPWORDS: frozenset[str] = STOPWORDS | GERMAN_STOPWORDS
 class RetrievedChunk:
     """A single RAG search result with full metadata."""
     content: str
-    score: float
+    score: float  # raw RRF rank-fusion score from hybrid search (NOT a 0–100% relevance)
     rank: int  # 1-based
     document_uri: str | None = None
     page_numbers: list[int] = field(default_factory=list)
+    query_similarity: float = 0.0  # cosine similarity between query and this chunk (a true 0–100% relevance)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -147,8 +148,9 @@ class QueryResult:
     found: int
     total_gold: int
     retrieved: int
-    found_texts: list[str]
-    missed_texts: list[str]
+    relevant_retrieved: int = 0  # how many retrieved chunks matched >=1 reference passage
+    found_texts: list[str] = field(default_factory=list)
+    missed_texts: list[str] = field(default_factory=list)
     retrieved_chunks: list[RetrievedChunk] | None = None
     match_details: list[OverlapDetail] | None = None
     miss_details: list[OverlapDetail] | None = None
@@ -336,14 +338,35 @@ class Evaluator:
         total = len(self.gold_standard)
         retrieved = len(chunks)
 
+        # Chunk-level precision: of the chunks we retrieved, how many were
+        # actually relevant (matched >=1 reference passage)?  This is a per-chunk
+        # measure, so it always stays between 0 and 100%.  Do not switch this to
+        # found_gold / retrieved_chunks: that compares two different populations
+        # (number of reference passages vs number of chunks) and can exceed 100%
+        # whenever reference passages outnumber retrieved chunks.
+        relevant_chunk_idxs: set[int] = set()
+        for chunk_idx, chunk in enumerate(chunks):
+            matched = any(
+                self._text_overlap(chunk.content, gold)[0]
+                for gold in self.gold_standard
+            )
+            if not matched and semantic_matrix is not None:
+                matched = bool(
+                    semantic_matrix[:, chunk_idx].max() >= self.semantic_threshold
+                )
+            if matched:
+                relevant_chunk_idxs.add(chunk_idx)
+        relevant_retrieved = len(relevant_chunk_idxs)
+
         return QueryResult(
             name=name,
             query=query[:200] + "..." if len(query) > 200 else query,
             recall=found / total if total else 0,
-            precision=found / retrieved if retrieved else 0,
+            precision=relevant_retrieved / retrieved if retrieved else 0,
             found=found,
             total_gold=total,
             retrieved=retrieved,
+            relevant_retrieved=relevant_retrieved,
             found_texts=found_texts,
             missed_texts=missed_texts,
             retrieved_chunks=chunks,
@@ -371,8 +394,17 @@ class Evaluator:
     async def run_query(
         self, rag: HDJRag, name: str, query: str, limit: int = 20
     ) -> QueryResult:
-        """Run query through RAG and evaluate results."""
-        results = await rag.search(query, limit=limit)
+        """Run query through RAG and evaluate results.
+
+        Validation measures *raw* retrieval quality, so the citation filter is
+        disabled here (it is a Search-tab display preference, not part of what we
+        are scoring). The query↔passage relevance is derived from the chunk
+        embeddings we already compute for the semantic-similarity matrix, so no
+        extra embedding work is sent to Ollama.
+        """
+        results = await rag.search(
+            query, limit=limit, drop_references=False, with_relevance=False
+        )
         chunks = [
             RetrievedChunk(
                 content=r["content"],
@@ -385,7 +417,9 @@ class Evaluator:
         ]
         retrieved_texts = [c.content for c in chunks]
 
-        # Compute semantic similarity matrix via embeddings
+        # Compute the gold×chunk semantic matrix, and reuse the same chunk
+        # embeddings to fill each chunk's query↔passage relevance (cosine) —
+        # one Ollama round-trip covers both.
         semantic_matrix = None
         if chunks:
             try:
@@ -394,10 +428,14 @@ class Evaluator:
                     self._gold_embeddings = await rag.embed_texts(
                         self.gold_standard
                     )
-                chunk_embeddings = await rag.embed_texts(retrieved_texts)
+                embeddings = await rag.embed_texts([query] + retrieved_texts)
+                query_embedding, chunk_embeddings = embeddings[0], embeddings[1:]
                 semantic_matrix = self._cosine_matrix(
                     self._gold_embeddings, chunk_embeddings
                 )
+                query_sims = self._cosine_matrix([query_embedding], chunk_embeddings)[0]
+                for chunk, sim in zip(chunks, query_sims):
+                    chunk.query_similarity = float(sim)
             except Exception:
                 logger.warning(
                     "Could not compute semantic similarity (is Ollama running?)",

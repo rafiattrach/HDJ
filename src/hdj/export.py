@@ -47,7 +47,7 @@ def generate_report(
 
     embedding_model = config.get("embedding_model", "Qwen3-Embedding-4B (via Ollama)")
     chunk_size = config.get("chunk_size", 512)
-    search_method = config.get("search_method", "Hybrid (vector + full-text with RRF reranking)")
+    search_method = config.get("search_method", "Hybrid search — keyword matching and meaning matching combined")
     results_limit = config.get("results_limit", 20)
     overlap_threshold = config.get("overlap_threshold", 0.3)
     threshold_pct = int(overlap_threshold * 100)
@@ -153,12 +153,12 @@ def generate_report(
         if r.retrieved_chunks:
             lines.append("**Top retrieved passages:**")
             lines.append("")
-            lines.append("| Rank | Score | Document | Pages |")
-            lines.append("|------|-------|----------|-------|")
+            lines.append("| Rank | Relevance | Document | Pages |")
+            lines.append("|------|-----------|----------|-------|")
             for chunk in r.retrieved_chunks[:10]:
                 doc = _pretty_doc_name(chunk.document_uri)
                 pages = ", ".join(map(str, chunk.page_numbers)) if chunk.page_numbers else "—"
-                lines.append(f"| #{chunk.rank} | {chunk.score:.1%} | {doc} | {pages} |")
+                lines.append(f"| #{chunk.rank} | {chunk.query_similarity:.0%} | {doc} | {pages} |")
             lines.append("")
 
         # Missed sections with diagnosis
@@ -174,7 +174,7 @@ def generate_report(
                     overlap_pct = int(detail.overlap_ratio * 100)
                     gap = threshold_pct - overlap_pct
                     lines.append(
-                        f"   - Nearest passage: #{chunk.rank} (score {chunk.score:.1%}) from {doc}"
+                        f"   - Nearest passage: #{chunk.rank} (relevance {chunk.query_similarity:.0%}) from {doc}"
                     )
                     lines.append(
                         f"   - {overlap_pct}% word overlap ({len(detail.overlapping_words)} content words) "

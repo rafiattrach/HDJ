@@ -46,6 +46,7 @@ class TestGenerateReport:
             rank=1,
             document_uri="file:///taylor.pdf",
             page_numbers=[3, 4],
+            query_similarity=0.71,
         )
         miss_detail = OverlapDetail(
             gold_text="A long gold passage that was missed",
@@ -106,6 +107,15 @@ class TestGenerateReport:
         report = generate_report([result], queries, gold, config)
         assert "## Reference Passages (2 passages)" in report
         assert "taylor.pdf" in report
+
+    def test_report_shows_relevance_not_rank_score(self, sample_data):
+        """The retrieved-passages table reports the real relevance (query
+        similarity), not the internal rank-fusion score."""
+        result, queries, gold, config = sample_data
+        report = generate_report([result], queries, gold, config)
+        assert "| Rank | Relevance | Document | Pages |" in report
+        assert "71%" in report          # query_similarity, shown as relevance
+        assert "| 85" not in report     # raw score must not appear in the table
 
     def test_report_contains_missed_diagnosis(self, sample_data):
         result, queries, gold, config = sample_data

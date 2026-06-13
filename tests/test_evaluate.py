@@ -223,6 +223,30 @@ class TestEvaluate:
         # 1 gold matched, 4 retrieved → precision = 1/4
         assert result.precision == pytest.approx(0.25)
 
+    def test_precision_never_exceeds_one(self):
+        """Precision (Accuracy) is a per-chunk ratio and must stay within 0–100%,
+        even when reference passages far outnumber retrieved chunks."""
+        gold = [
+            "data justice fairness",
+            "algorithmic bias harm",
+            "biometric exclusion poor",
+            "surveillance migrants refugees",
+            "community governance consent",
+            "equitable health access",
+        ]
+        ev = Evaluator(gold, overlap_threshold=0.3)
+        # Two chunks that together contain every gold passage's words.
+        retrieved = [
+            "data justice fairness and algorithmic bias harm and biometric exclusion poor",
+            "surveillance migrants refugees community governance consent equitable health access",
+        ]
+        result = ev.evaluate("t", "q", retrieved)
+        assert result.found == 6          # all 6 reference passages matched
+        assert result.retrieved == 2       # only 2 chunks
+        assert result.relevant_retrieved == 2
+        assert result.precision == pytest.approx(1.0)  # 2 relevant chunks / 2 retrieved
+        assert 0.0 <= result.precision <= 1.0
+
     def test_empty_retrieved(self, evaluator, simple_gold):
         """No results retrieved → 0 recall, 0 precision."""
         result = evaluator.evaluate("test", "query", [])

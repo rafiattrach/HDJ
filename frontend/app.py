@@ -23,6 +23,7 @@ from src.hdj import HDJRag, Evaluator, log_event, load_events, generate_report
 from src.hdj.audit import clear_events
 from src.hdj.evaluate import save_results
 from src.hdj.history import load_all_runs, diff_runs, aggregate_query_performance, format_timestamp
+from frontend.ui_help import metrics_glossary
 
 # Paths
 ROOT = Path(__file__).parent.parent
@@ -409,9 +410,11 @@ async def run_evaluation(
         return results
 
 
-async def search_documents(query: str, limit: int = 10, cross_lingual: bool = True):
+async def search_documents(query: str, limit: int = 10, cross_lingual: bool = True,
+                           drop_references: bool = True):
     async with HDJRag(DB_PATH) as rag:
-        return await rag.search(query, limit=limit, cross_lingual=cross_lingual)
+        return await rag.search(query, limit=limit, cross_lingual=cross_lingual,
+                                drop_references=drop_references)
 
 
 def _do_build_index(force: bool) -> tuple[int, list[str]]:
@@ -484,14 +487,15 @@ def _do_run_evaluation(
         loop.run_until_complete(rag.__aenter__())
         try:
             # Pre-compute gold embeddings (heavy, one-time step)
-            status.write("Computing reference passage embeddings...")
+            status.write("Analyzing reference passages...")
             try:
                 evaluator._gold_embeddings = loop.run_until_complete(
                     rag.embed_texts(evaluator.gold_standard)
                 )
             except Exception:
                 status.write(
-                    "⚠️ Could not pre-compute embeddings (is Ollama running?)"
+                    "⚠️ Could not analyze reference passages — make sure the "
+                    "search engine (Ollama) is running."
                 )
 
             results = []
@@ -598,7 +602,7 @@ with col1:
 with col2:
     st.markdown("<br>", unsafe_allow_html=True)
     st.markdown('<div class="danger-btn">', unsafe_allow_html=True)
-    if st.button("🚨 Reset All", help="Reset PDFs, index, gold standard, and queries to defaults"):
+    if st.button("🚨 Reset All", help="Reset PDFs, prepared data, reference passages, and questions to defaults"):
         st.session_state["confirm_reset"] = True
     st.markdown('</div>', unsafe_allow_html=True)
 
@@ -675,7 +679,7 @@ with tab1:
                     pdf.unlink()
                     # Warn if it was indexed
                     if pdf.name in indexed_pdfs:
-                        st.warning("This PDF was indexed. Rebuild the index to update.")
+                        st.warning("This PDF was part of the prepared library. Re-run **Prepare Documents** to update.")
                     st.rerun()
     else:
         st.info("No PDFs yet. Upload some above, or click 'Reset All' to restore defaults.")
@@ -770,8 +774,8 @@ with tab4:
                 know are relevant to your research. You paste them here so the tool
                 can measure how well each research question finds them.
 
-                - **Coverage** = What % of your reference passages did the search find? (Higher = better)
-                - **Accuracy** = What % of returned results actually matched a reference passage? (Higher = less noise)
+                - **Coverage** = Of your reference passages, what % did the search find? `found ÷ total reference passages`. (Higher = better)
+                - **Accuracy** = Of the passages the search returned, what % were actually relevant (matched a reference passage)? `relevant results ÷ results returned`. Always 0–100%. (Higher = less noise)
                 """)
         with col2:
             with st.expander("🔧 How does the search work?", expanded=False):
@@ -779,15 +783,17 @@ with tab4:
                 The tool reads each PDF and breaks it into short passages
                 (roughly half a page each). When you type a research question,
                 it finds the passages whose meaning is closest to your question
-                and ranks them by relevance (0–100%).
+                and gives each one a **Relevance %** — how closely it matches the
+                meaning of your question, from 0% (unrelated) to 100% (almost the
+                same meaning).
 
-                **Validation matching:**
-                - **Word match** — counts how many meaningful words are shared
-                  between a reference passage and a retrieved passage (common
-                  words like "the" and "of" are ignored)
-                - **Meaning similarity** — checks whether two passages express
-                  the same idea, even if worded differently or in different
-                  languages (German ↔ English)
+                **How a reference passage is counted as "found":**
+                - **Word match** — how many meaningful words are shared between a
+                  reference passage and a found passage (common words like "the"
+                  and "of" are ignored)
+                - **Meaning similarity** — whether two passages express the same
+                  idea, even if worded differently or in different languages
+                  (German ↔ English)
                 """)
     
         gold = load_gold_standard()
@@ -1005,10 +1011,11 @@ with tab4:
         if st.session_state.eval_results:
             st.divider()
             st.subheader("Results")
-        
+            metrics_glossary("validation")
+
             results = st.session_state.eval_results
             sorted_results = sorted(results, key=lambda x: x.recall, reverse=True)
-        
+
             # Summary
             for r in sorted_results:
                 emoji = "🟢" if r.recall >= 0.8 else "🟡" if r.recall >= 0.5 else "🔴"
@@ -1018,7 +1025,7 @@ with tab4:
                 with cols[1]:
                     st.markdown(f'<span title="What percentage of reference passages were found by this question">Coverage: <strong>{r.recall:.0%}</strong></span>', unsafe_allow_html=True)
                 with cols[2]:
-                    st.markdown(f'<span title="What percentage of retrieved results were actually relevant">Accuracy: {r.precision:.0%}</span>', unsafe_allow_html=True)
+                    st.markdown(f'<span title="Of the {r.retrieved} results returned, {r.relevant_retrieved} matched a reference passage">Accuracy: {r.precision:.0%} ({r.relevant_retrieved}/{r.retrieved})</span>', unsafe_allow_html=True)
                 with cols[3]:
                     st.markdown(f'<span title="How many reference passages were matched out of the total">Found {r.found}/{r.total_gold} reference passages</span>', unsafe_allow_html=True)
         
@@ -1049,7 +1056,7 @@ with tab4:
                                     preview += "..."
                                 st.markdown(
                                     f'<span class="rank-badge" title="Position in search results">#{chunk.rank}</span> '
-                                    f'<span class="score-badge" title="Relevance score: how closely this passage matches your question (0–100%)">Relevance {chunk.score:.1%}</span> '
+                                    f'<span class="score-badge" title="Relevance = how closely this passage matches the meaning of your question (0–100%). The grey #N badge is its position in the results list.">Relevance {chunk.query_similarity:.0%}</span> '
                                     f'{html_mod.escape(doc)} · Pages {pages}<br>'
                                     f'<span class="chunk-meta">{html_mod.escape(preview)}</span>',
                                     unsafe_allow_html=True,
@@ -1066,7 +1073,7 @@ with tab4:
                                 col_g, col_c = st.columns(2)
                                 with col_g:
                                     st.markdown("**Reference passage:**")
-                                    highlighted = highlight_overlap(detail.gold_text_preview, detail.overlapping_words)
+                                    highlighted = highlight_overlap(detail.gold_text, detail.overlapping_words)
                                     st.markdown(highlighted, unsafe_allow_html=True)
                                 with col_c:
                                     if detail.matched_chunk:
@@ -1074,15 +1081,13 @@ with tab4:
                                         st.markdown("**Best matching passage:**")
                                         badges = (
                                             f'<span class="rank-badge" title="Position in search results">#{chunk.rank}</span> '
-                                            f'<span class="score-badge" title="Relevance score: how closely this passage matches your question (0–100%)">Relevance {chunk.score:.1%}</span>'
+                                            f'<span class="score-badge" title="Relevance = how closely this passage matches the meaning of your question (0–100%). The grey #N badge is its position in the results list.">Relevance {chunk.query_similarity:.0%}</span>'
                                         )
                                         if detail.semantic_similarity > 0:
                                             badges += f' <span class="semantic-badge">{detail.semantic_similarity:.0%} meaning similarity</span>'
                                         st.markdown(badges, unsafe_allow_html=True)
-                                        chunk_preview = chunk.content[:200].replace("\n", " ")
-                                        if len(chunk.content) > 200:
-                                            chunk_preview += "..."
-                                        chunk_highlighted = highlight_overlap(chunk_preview, detail.overlapping_words)
+                                        chunk_full = chunk.content.replace("\n", " ")
+                                        chunk_highlighted = highlight_overlap(chunk_full, detail.overlapping_words)
                                         st.markdown(chunk_highlighted, unsafe_allow_html=True)
 
                     # Missed sections
@@ -1092,7 +1097,7 @@ with tab4:
                             sem_label = f" · {detail.semantic_similarity:.0%} meaning similarity" if detail.semantic_similarity > 0 else ""
                             with st.expander(f"Missed {i+1} — only {detail.overlap_ratio:.0%} word match{sem_label} with nearest passage", expanded=True):
                                 st.markdown(
-                                    f'<div class="overlap-miss">{html_mod.escape(detail.gold_text_preview)}</div>',
+                                    f'<div class="overlap-miss">{html_mod.escape(detail.gold_text)}</div>',
                                     unsafe_allow_html=True,
                                 )
                                 if detail.matched_chunk:
@@ -1100,7 +1105,7 @@ with tab4:
                                     doc = _pretty_doc_name(chunk.document_uri)
                                     badges = (
                                         f'<span class="rank-badge" title="Position in search results">#{chunk.rank}</span> '
-                                        f'<span class="score-badge" title="Relevance score: how closely this passage matches your question (0–100%)">Relevance {chunk.score:.1%}</span>'
+                                        f'<span class="score-badge" title="Relevance = how closely this passage matches the meaning of your question (0–100%). The grey #N badge is its position in the results list.">Relevance {chunk.query_similarity:.0%}</span>'
                                     )
                                     if detail.semantic_similarity > 0:
                                         badges += f' <span class="semantic-badge">{detail.semantic_similarity:.0%} meaning similarity</span>'
@@ -1114,10 +1119,8 @@ with tab4:
                                         f"({len(detail.overlapping_words)} shared words) — "
                                         f"below the {int(overlap_threshold * 100)}% threshold needed to count as a match"
                                     )
-                                    chunk_preview = chunk.content[:200].replace("\n", " ")
-                                    if len(chunk.content) > 200:
-                                        chunk_preview += "..."
-                                    st.markdown(f'<div style="background:#f9fafb; border:1px solid #e5e7eb; border-radius:6px; padding:0.75rem; font-size:0.9rem; color:#1a1a1a; margin:0.5rem 0; white-space:pre-wrap;">{html_mod.escape(chunk_preview)}</div>', unsafe_allow_html=True)
+                                    chunk_full = chunk.content.replace("\n", " ")
+                                    st.markdown(f'<div style="background:#f9fafb; border:1px solid #e5e7eb; border-radius:6px; padding:0.75rem; font-size:0.9rem; color:#1a1a1a; margin:0.5rem 0; white-space:pre-wrap;">{html_mod.escape(chunk_full)}</div>', unsafe_allow_html=True)
                                 else:
                                     st.markdown("No passages retrieved.")
                     elif r.missed_texts:
@@ -1132,7 +1135,7 @@ with tab4:
             report_config = {
                 "embedding_model": "Qwen3-Embedding-4B (via Ollama)",
                 "chunk_size": 512,
-                "search_method": "Hybrid (vector + full-text with RRF reranking)",
+                "search_method": "Hybrid search — keyword matching and meaning matching combined",
                 "results_limit": limit,
                 "overlap_threshold": overlap_threshold,
                 "semantic_threshold": semantic_threshold,
@@ -1178,7 +1181,7 @@ with tab3:
                 '_"Which policies address equity in health data governance?"_'
             )
 
-        col1, col2, col3 = st.columns([2, 1, 1])
+        col1, col2, col3, col4 = st.columns([2, 1, 1, 1])
         with col2:
             limit = st.number_input("Max results", min_value=5, max_value=2000, value=10, key="search_limit", help="More results = more comprehensive but slower to scroll through.")
         with col3:
@@ -1186,6 +1189,12 @@ with tab3:
                 "Cross-lingual",
                 value=True,
                 help="Also search with the question translated to the other language (DE↔EN). Uses offline translation.",
+            )
+        with col4:
+            hide_refs = st.checkbox(
+                "Hide citations",
+                value=True,
+                help="Skip passages that are bibliography / reference-list entries (dense in '(2016)', 'et al.', DOIs, URLs). Turn off if you are specifically looking for citations.",
             )
 
         if st.button("🔍 Search", disabled=not query):
@@ -1200,7 +1209,7 @@ with tab3:
             with st.spinner("Searching..."):
                 loop = asyncio.new_event_loop()
                 try:
-                    results = loop.run_until_complete(search_documents(query, limit, cross_lingual=cross_lingual))
+                    results = loop.run_until_complete(search_documents(query, limit, cross_lingual=cross_lingual, drop_references=hide_refs))
                 finally:
                     loop.close()
                 st.session_state.search_results = results
@@ -1224,11 +1233,17 @@ with tab3:
             # Summary line
             doc_names = {_pretty_doc_name(r.get("document_uri")) for r in results}
             st.markdown(f"**Found {len(results)} relevant passages across {len(doc_names)} documents**")
+            metrics_glossary("search")
 
             for i, r in enumerate(results):
                 pages = r.get("page_numbers", [])
                 content = r.get("content", "")
-                score = r.get("score", 0.0)
+                # Real query↔passage relevance (cosine, 0–1). May be None if the
+                # relevance model was unavailable — in that case show "n/a" rather
+                # than the raw rank-fusion score, which is not a relevance value.
+                rel = r.get("relevance")
+                has_rel = rel is not None
+                rel_text = f"{rel:.0%}" if has_rel else "n/a"
                 doc = _pretty_doc_name(r.get("document_uri"))
 
                 # Page label
@@ -1240,7 +1255,7 @@ with tab3:
                 else:
                     page_label = ""
 
-                label = f"Result {i+1} · Relevance: {score:.1%} · {doc}"
+                label = f"Result {i+1} · Relevance: {rel_text} · {doc}"
                 if page_label:
                     label += f" · {page_label}"
 
@@ -1249,7 +1264,10 @@ with tab3:
                     st.markdown(f"**📄 {doc}**" + (f" — {page_label}" if page_label else ""))
 
                     # Relevance progress bar
-                    st.progress(min(score, 1.0), text=f"Relevance: {score:.1%}")
+                    if has_rel:
+                        st.progress(min(rel, 1.0), text=f"Relevance: {rel_text}")
+                    else:
+                        st.caption("Relevance score unavailable — could not reach the relevance model.")
 
                     # Passage content as styled div instead of disabled textarea
                     st.markdown(
@@ -1303,7 +1321,7 @@ with tab3:
                                 "content": content,
                                 "document": doc,
                                 "page_numbers": pages,
-                                "relevance_score": round(score, 4),
+                                "relevance_score": round(rel, 4) if has_rel else None,
                                 "saved_at": datetime.now().isoformat(),
                                 "search_query": search_q,
                             })
@@ -1368,7 +1386,7 @@ with tab_findings:
                     pgs = ", ".join(map(str, p.get("page_numbers", [])))
                     md_lines.append(f'{j}. **{p.get("document", "")}**' + (f" (p. {pgs})" if pgs else ""))
                     md_lines.append(f'   > "{preview}"')
-                    md_lines.append(f'   - Relevance: {p.get("relevance_score", 0):.1%}')
+                    md_lines.append(f'   - Relevance: {(p.get("relevance_score") or 0):.1%}')
                     md_lines.append(f'   - Search query: {p.get("search_query", "")}')
                     md_lines.append("")
                 md_lines.append("")
@@ -1398,7 +1416,8 @@ with tab_findings:
                     page_str = f"Page {', '.join(map(str, pgs))}" if pgs else ""
 
                     st.markdown(f"**📄 {doc_name}**" + (f" — {page_str}" if page_str else ""))
-                    st.progress(min(p.get("relevance_score", 0), 1.0), text=f"Relevance: {p.get('relevance_score', 0):.1%}")
+                    rscore = p.get("relevance_score") or 0
+                    st.progress(min(rscore, 1.0), text=f"Relevance: {rscore:.1%}")
 
                     preview = p["content"][:300].replace("\n", " ")
                     if len(p["content"]) > 300:
